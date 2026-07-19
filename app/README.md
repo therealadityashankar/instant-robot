@@ -5,8 +5,10 @@ A browser (Svelte + TypeScript) port of [`calibration/calibrate_board.py`](../ca
 It opens your webcam, detects the printed ArUco board's border tags, computes a
 homography to a canonical bird's-eye view, and runs the same 4-corner perspective
 calibration as the Python tool — all client-side. ArUco detection, `findHomography`
-and `warpPerspective` are provided by [OpenCV.js](https://docs.opencv.org/) (loaded
-from a CDN in `index.html`).
+and `warpPerspective` are provided by OpenCV.js via the
+[`@techstark/opencv-js`](https://www.npmjs.com/package/@techstark/opencv-js) npm
+package — a build compiled *with* the contrib `aruco` module (the stock
+docs.opencv.org build omits it), bundled locally so nothing loads cross-origin.
 
 ## Run
 
