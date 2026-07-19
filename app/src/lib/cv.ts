@@ -11,33 +11,35 @@ import cvModule from '@techstark/opencv-js';
 
 let readyPromise: Promise<Cv> | null = null;
 
-/** Resolve once OpenCV.js has finished initialising its WASM runtime. */
+/**
+ * Resolve once OpenCV.js has finished initialising its WASM runtime.
+ * The module export takes one of three shapes depending on the build, so we
+ * handle all of them (per the @techstark/opencv-js README):
+ *   - a Promise that resolves to the ready `cv` (OpenCV 5 builds),
+ *   - an already-initialised module (`cv.Mat` present),
+ *   - a module that fires `onRuntimeInitialized` when ready.
+ */
 export function loadCv(): Promise<Cv> {
   if (readyPromise) return readyPromise;
 
-  readyPromise = new Promise((resolve, reject) => {
-    const cv = cvModule as Cv;
-    const deadline = Date.now() + 30_000;
+  const mod = cvModule as Cv;
 
-    const check = () => {
-      // `cv.Mat` only becomes defined after the WASM runtime is initialised.
-      if (cv && cv.Mat) {
-        resolve(cv);
-        return;
-      }
-      if (Date.now() > deadline) {
-        reject(new Error('OpenCV.js failed to initialise within 30s'));
-        return;
-      }
-      setTimeout(check, 50);
-    };
-
-    // Prefer the official hook when the runtime hasn't started yet.
-    if (cv && !cv.Mat) {
-      cv.onRuntimeInitialized = () => resolve(cv);
-    }
-    check();
-  });
+  if (mod instanceof Promise) {
+    readyPromise = mod.then((cv: Cv) => cv);
+  } else if (mod && mod.Mat) {
+    readyPromise = Promise.resolve(mod);
+  } else {
+    readyPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('OpenCV.js failed to initialise within 30s')),
+        30_000,
+      );
+      mod.onRuntimeInitialized = () => {
+        clearTimeout(timer);
+        resolve(mod);
+      };
+    });
+  }
 
   return readyPromise;
 }
