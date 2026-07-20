@@ -9,7 +9,8 @@ export type PickPhase = 'idle' | 'approach' | 'descend' | 'grasp' | 'lift' | 'do
 export interface PickParams {
   hoverZ: number; // m above board to hover before descending
   graspZ: number; // m above board to close the gripper
-  graspXOffset: number; // m forward (+x) offset applied while descending/grasping/lifting
+  graspXOffset: number; // m +x offset applied while descending/grasping/lifting
+  graspYOffset: number; // m +y offset applied while descending/grasping/lifting
   liftZ: number; // m above board for the final lift
   ikZOffset: number; // global vertical offset added to every IK target
   posThreshold: number; // m — how close the EE must be to advance
@@ -20,8 +21,9 @@ export interface PickParams {
 
 export const DEFAULT_PICK: PickParams = {
   hoverZ: 0.1,
-  graspZ: -0.025, // 0.047 m lower than the original 0.022 (descend + grasp height)
+  graspZ: 0.01, // descend + grasp height above the board
   graspXOffset: 0.029, // reach 0.029 m forward when descending/grasping
+  graspYOffset: 0, // lateral offset when descending/grasping
   liftZ: 0.12,
   ikZOffset: 0.1,
   posThreshold: 0.0175,
@@ -52,16 +54,17 @@ export function phaseTarget(
 ): { target: [number, number, number]; gripper: number } {
   const [bx, by] = block;
   const p = params;
-  const gx = bx + p.graspXOffset; // forward-reach x for descend/grasp/lift
+  const gx = bx + p.graspXOffset; // grasp x/y for descend/grasp/lift
+  const gy = by + p.graspYOffset;
   switch (phase) {
     case 'approach':
       return { target: [bx, by, p.hoverZ + p.ikZOffset], gripper: p.gripperOpen };
     case 'descend':
-      return { target: [gx, by, p.graspZ + p.ikZOffset], gripper: p.gripperOpen };
+      return { target: [gx, gy, p.graspZ + p.ikZOffset], gripper: p.gripperOpen };
     case 'grasp':
-      return { target: [gx, by, p.graspZ + p.ikZOffset], gripper: p.gripperClose };
+      return { target: [gx, gy, p.graspZ + p.ikZOffset], gripper: p.gripperClose };
     case 'lift':
-      return { target: [gx, by, p.liftZ + p.ikZOffset], gripper: p.gripperClose };
+      return { target: [gx, gy, p.liftZ + p.ikZOffset], gripper: p.gripperClose };
     default:
       return { target: block, gripper: p.gripperOpen };
   }
@@ -108,7 +111,8 @@ export class PickController {
       return { target: eePos, gripper: p.gripperOpen, phase: this.phase, done: this.phase === 'done' };
     }
     const [bx, by] = this.block;
-    const gx = bx + p.graspXOffset; // forward-reach x for descend/grasp/lift
+    const gx = bx + p.graspXOffset; // grasp x/y for descend/grasp/lift
+    const gy = by + p.graspYOffset;
 
     if (this.phase === 'approach') {
       const target: [number, number, number] = [bx, by, p.hoverZ + p.ikZOffset];
@@ -116,7 +120,7 @@ export class PickController {
       return { target, gripper: p.gripperOpen, phase: 'approach', done: false };
     }
     if (this.phase === 'descend') {
-      const target: [number, number, number] = [gx, by, p.graspZ + p.ikZOffset];
+      const target: [number, number, number] = [gx, gy, p.graspZ + p.ikZOffset];
       if (dist(eePos, target) < p.posThreshold) {
         this.phase = 'grasp';
         this.graspCounter = 0;
@@ -124,13 +128,13 @@ export class PickController {
       return { target, gripper: p.gripperOpen, phase: 'descend', done: false };
     }
     if (this.phase === 'grasp') {
-      const target: [number, number, number] = [gx, by, p.graspZ + p.ikZOffset];
+      const target: [number, number, number] = [gx, gy, p.graspZ + p.ikZOffset];
       this.graspCounter += 1;
       if (this.graspCounter >= p.graspFrames) this.phase = 'lift';
       return { target, gripper: p.gripperClose, phase: 'grasp', done: false };
     }
     // lift
-    const target: [number, number, number] = [gx, by, p.liftZ + p.ikZOffset];
+    const target: [number, number, number] = [gx, gy, p.liftZ + p.ikZOffset];
     if (dist(eePos, target) < p.posThreshold) this.phase = 'done';
     return { target, gripper: p.gripperClose, phase: 'lift', done: this.phase === 'done' };
   }

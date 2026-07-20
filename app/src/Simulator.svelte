@@ -11,7 +11,7 @@
   import { Robot } from './lib/robot';
   import { CALIBRATION_PLAN, simRadToServo, type JointCalibration } from './lib/joints';
   import { buildBoardSceneXml, interiorToSim, SQUARE_MM, INSET_MM } from './lib/boardSim';
-  import { PickController, phaseTarget, DEFAULT_PICK, type PickPhase } from './lib/pick';
+  import { phaseTarget, DEFAULT_PICK, type PickPhase } from './lib/pick';
   import { loadCv, type Cv } from './lib/cv';
   import { OUT_W, boardTagCentres, BORDERED_IDS, type TagCentres } from './lib/board';
   import {
@@ -39,6 +39,9 @@
     'base_so101_v2.stl',
   ];
   const ARM_DOFS = [0, 1, 2, 3, 4];
+  // Extra 90° added to wrist_roll (dof 4) for the on-screen pose ONLY — the real
+  // servo still gets the raw IK-solved angle.
+  const WRIST_ROLL_OFFSET = Math.PI / 2;
   const GRASP_SITE = 'graspframe';
 
   let canvas: HTMLCanvasElement;
@@ -52,6 +55,7 @@
   let ikOk = $state(true);
   let ikErrMm = $state(0);
   let jointAngles = $state<number[]>([0, 0, 0, 0, 0]);
+  let gripperRange = $state<[number, number]>([-0.1745, 1.7453]); // [open, closed]
 
   // ── sim / real ─────────────────────────────────────────────────────────────
   let mode = $state<'sim' | 'real'>('sim');
@@ -63,20 +67,20 @@
   let lastSent = 0;
 
   // ── pick + board detection ──────────────────────────────────────────────────
-  const pick = new PickController();
   let pickPhase = $state<PickPhase>('idle');
   let blockTag = $state(101);
   let gripperCmd = $state(-0.1745); // current gripper angle (rad)
 
   // Stage selector: '' = off (manual sliders), 'auto' = run the full sequence,
   // or a single phase to drive to and hold there.
-  type Stage = '' | 'auto' | 'approach' | 'descend' | 'grasp' | 'lift';
+  type Stage = '' | 'approach' | 'descend' | 'grasp' | 'lift';
   let stage = $state<Stage>('');
   // Last known sim position of the selected block (from detection).
   let pickBlock = $state<[number, number, number] | null>(null);
-  // Configurable grasp/descend depth (m above board; can go negative).
+  // Configurable grasp offsets (m). Depth = descend/grasp height (can be negative).
   let graspDepth = $state(DEFAULT_PICK.graspZ);
-  $effect(() => pick.setParams({ graspZ: graspDepth }));
+  let graspX = $state(DEFAULT_PICK.graspXOffset);
+  let graspY = $state(DEFAULT_PICK.graspYOffset);
 
   // Board perspective correction (from the Test-calibration tab's JSON).
   let boardCorr = $state<{ Sx: number; Bx: number; Sy: number; By: number } | null>(null);
@@ -126,6 +130,10 @@
       solver = new IKSolver(mj, session.model, session.data, GRASP_SITE);
       target = solver.sitePosition();
 
+      // Gripper ctrlrange (joint index 5) for the gripper slider.
+      const cr = Array.from(session.model.actuator_ctrlrange as ArrayLike<number>);
+      if (cr[10] < cr[11]) gripperRange = [cr[10], cr[11]];
+
       renderer = new MujocoRenderer(canvas, mj, session.model, session.data);
       renderer.setTarget(target);
       fitCanvas();
@@ -149,18 +157,16 @@
     if (!solver || !renderer || !session) return;
     const q = session.data.qpos as Float64Array;
 
-    // A pick, if running, overrides the manual target with its phase target.
+    // A selected stage overrides the manual target with that phase's target.
     let solveTarget = target;
-    if (stage === 'auto' && pick.active) {
-      const step = pick.step(solver.sitePosition());
-      solveTarget = step.target;
-      gripperCmd = step.gripper;
-      pickPhase = step.phase;
-      target = step.target;
-      if (step.done) stage = '';
-    } else if (stage !== '' && stage !== 'auto' && pickBlock) {
-      // Manual stepping: drive to the chosen stage and hold there.
-      const s = phaseTarget(pickBlock, stage, { ...DEFAULT_PICK, graspZ: graspDepth });
+    if (stage !== '' && pickBlock) {
+      // Drive to the chosen stage and hold there.
+      const s = phaseTarget(pickBlock, stage, {
+        ...DEFAULT_PICK,
+        graspZ: graspDepth,
+        graspXOffset: graspX,
+        graspYOffset: graspY,
+      });
       solveTarget = s.target;
       gripperCmd = s.gripper;
       pickPhase = stage;
@@ -174,8 +180,18 @@
     ikOk = res.ok;
     ikErrMm = res.error * 1000;
     jointAngles = res.qpos;
+
+    // Display-only fixups (restored afterwards so they don't affect IK or the
+    // streamed command): wrist_roll gets +90°, and the gripper open/close is
+    // flipped because the model's gripper geometry renders inverted vs the real arm.
+    const solvedRoll = q[4];
+    q[4] = solvedRoll + WRIST_ROLL_OFFSET;
+    q[5] = gripperRange[0] + gripperRange[1] - gripperCmd;
+    session.forward();
     renderer.setTarget(solveTarget);
     renderer.update();
+    q[4] = solvedRoll;
+    q[5] = gripperCmd;
 
     maybeDetect();
     maybeStreamToRobot();
@@ -272,18 +288,16 @@
       H.delete();
     }
     detected = m;
-    // Track the selected block live in the sim (except during an auto pick,
-    // where the block position is frozen when the sequence starts).
+    // Track the selected block live in the sim.
     const d = m.get(blockTag);
     if (d) {
       pickBlock = interiorToSim(d[0], d[1]);
-      if (stage !== 'auto') setBlockMocap(pickBlock);
+      setBlockMocap(pickBlock);
     }
   }
 
   function onStageChange(next: Stage) {
     detectMsg = null;
-    pick.cancel();
     if (next === '') {
       stage = '';
       pickPhase = 'idle';
@@ -298,11 +312,6 @@
       return;
     }
     stage = next;
-    if (next === 'auto') {
-      setBlockMocap(pickBlock);
-      pick.start(pickBlock);
-      pickPhase = 'approach';
-    }
   }
 
   async function connectRobot() {
@@ -369,7 +378,6 @@
     if (mode === 'real') startCamera();
     else {
       stopCamera();
-      pick.cancel();
       stage = '';
       pickPhase = 'idle';
     }
@@ -411,6 +419,17 @@
         />
         <span class="val">{target[i].toFixed(3)}</span>
       {/each}
+      <label>grip</label>
+      <input
+        type="range"
+        min={gripperRange[0]}
+        max={gripperRange[1]}
+        step="0.01"
+        bind:value={gripperCmd}
+      />
+      <span class="val">
+        {Math.round(((gripperCmd - gripperRange[0]) / (gripperRange[1] - gripperRange[0])) * 100)}%
+      </span>
     </div>
 
     <div class="ikstatus {ikOk ? 'ok' : 'bad'}">
@@ -421,10 +440,11 @@
       <thead><tr><th>joint</th><th>rad</th><th>deg</th></tr></thead>
       <tbody>
         {#each ['pan', 'lift', 'elbow', 'wrist_flex', 'wrist_roll'] as name, i (name)}
+          {@const a = jointAngles[i]}
           <tr>
             <td>{name}</td>
-            <td>{jointAngles[i]?.toFixed(3) ?? '—'}</td>
-            <td>{jointAngles[i] != null ? ((jointAngles[i] * 180) / Math.PI).toFixed(1) : '—'}</td>
+            <td>{a != null ? a.toFixed(3) : '—'}</td>
+            <td>{a != null ? ((a * 180) / Math.PI).toFixed(1) : '—'}</td>
           </tr>
         {/each}
       </tbody>
@@ -484,17 +504,22 @@
             <option value="descend">2 · Descend</option>
             <option value="grasp">3 · Grasp (close)</option>
             <option value="lift">4 · Lift</option>
-            <option value="auto">▶ Auto (full sequence)</option>
           </select>
         </div>
         <div class="pickrow">
           <label for="depth">Grasp depth (m)</label>
           <input id="depth" type="number" step="0.005" bind:value={graspDepth} />
         </div>
+        <div class="pickrow">
+          <label for="gx">Grasp X offset (m)</label>
+          <input id="gx" type="number" step="0.005" bind:value={graspX} />
+        </div>
+        <div class="pickrow">
+          <label for="gy">Grasp Y offset (m)</label>
+          <input id="gy" type="number" step="0.005" bind:value={graspY} />
+        </div>
         <div class="status {detected.has(blockTag) ? 'ok' : 'warn'}">
-          {#if stage === 'auto'}
-            auto pick · phase: <strong>{pickPhase}</strong>
-          {:else if stage !== ''}
+          {#if stage !== ''}
             holding at <strong>{stage}</strong>
           {:else if detected.has(blockTag)}
             block {blockTag} detected {boardCorr ? '(corrected)' : '(uncorrected — load board calibration)'}

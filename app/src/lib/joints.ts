@@ -31,8 +31,8 @@ export const CALIBRATION_PLAN: JointDef[] = [
     description: 'Base rotation — sweeps arm left / right',
     points: [
       { label: 'Centered (straight forward)', simRad: 0.0 },
-      { label: 'Swept LEFT  ~90°', simRad: HALF_PI },
-      { label: 'Swept RIGHT ~90°', simRad: -HALF_PI },
+      { label: 'Swept RIGHT ~90°', simRad: HALF_PI },
+      { label: 'Swept LEFT  ~90°', simRad: -HALF_PI },
     ],
   },
   {
@@ -51,8 +51,8 @@ export const CALIBRATION_PLAN: JointDef[] = [
     servoId: 3,
     description: 'Elbow bend — folds the forearm',
     points: [
-      { label: 'Elbow fully STRAIGHT', simRad: 0.0 },
-      { label: 'Elbow bent ~90°', simRad: HALF_PI },
+      { label: 'Elbow at ~90°', simRad: 0.0 },
+      { label: 'Elbow fully BENT', simRad: HALF_PI },
     ],
   },
   {
