@@ -1,0 +1,8 @@
+{
+  // Static-assets-only Worker (no server code) — serves the built Vite app.
+  "name": "instant-robot",
+  "compatibility_date": "2025-01-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}
