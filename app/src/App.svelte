@@ -18,6 +18,8 @@
   import { drawRawPanel, drawRectifiedPanel } from './lib/render';
   import { fitLinear2d, formatFitReport, type LinearFit } from './lib/geometry';
   import { DEFAULT_PARAMS, type BoardParams, type CalibState } from './lib/types';
+  import JointCalibration from './JointCalibration.svelte';
+  import Simulator from './Simulator.svelte';
 
   let params = $state<BoardParams>({ ...DEFAULT_PARAMS });
 
@@ -27,6 +29,20 @@
   let statusText = $state('Loading OpenCV.js…');
   let statusClass = $state<'ok' | 'warn' | 'bad'>('warn');
   let report = $state<string | null>(null);
+
+  // ── Mode: calibrate vs. test an existing calibration ──────────────────────
+  type Correction = { Sx: number; Bx: number; Sy: number; By: number };
+  let mode = $state<'calibrate' | 'test' | 'joints' | 'sim'>('calibrate');
+  let loadedCorr = $state<Correction | null>(null);
+  let loadedSource = $state<string | null>(null);
+  interface Readout {
+    id: number;
+    rawX: number;
+    rawY: number;
+    calX: number;
+    calY: number;
+  }
+  let readout = $state<Readout[]>([]);
 
   let rawCanvas: HTMLCanvasElement;
   let rectCanvas: HTMLCanvasElement;
@@ -152,8 +168,17 @@
   }
 
   // ── Main loop ─────────────────────────────────────────────────────────────
-  function processFrame(cap: any, src: any, gray: any, tagCentresMm: TagCentres) {
-    cap.read(src);
+  function processFrame(
+    grabCtx: CanvasRenderingContext2D,
+    src: any,
+    gray: any,
+    tagCentresMm: TagCentres,
+  ) {
+    // Grab the current video frame into the reused RGBA Mat.
+    const { width, height } = grabCtx.canvas;
+    grabCtx.drawImage(video, 0, 0, width, height);
+    const frame = grabCtx.getImageData(0, 0, width, height);
+    src.data.set(frame.data);
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
     const cornersDict = detectMarkers(cv, detector, gray);
@@ -167,12 +192,72 @@
     const rawCtx = rawCanvas.getContext('2d')!;
     const rectCtx = rectCanvas.getContext('2d')!;
     drawRawPanel(cv, rawCtx, video, cornersDict, tagCentresMm, H, params.squareMm);
+    const testOverlay =
+      mode === 'test' && loadedCorr
+        ? { corr: loadedCorr, blockW: params.blockW, blockD: params.blockD }
+        : null;
     drawRectifiedPanel(
       cv, rectCtx, src, H, params.squareMm, params.tagMm, params.gapMm,
-      cornersDict, tagCentresMm, innerTagsStart(), calib,
+      cornersDict, tagCentresMm, innerTagsStart(), calib, testOverlay,
     );
 
     updateStatus(cornersDict, tagCentresMm, inliers, !!H);
+
+    if (mode === 'test') computeReadout(cornersDict, H, tagCentresMm);
+    else if (readout.length) readout = [];
+  }
+
+  /** In test mode, apply the loaded correction to every detected object tag. */
+  function computeReadout(
+    cornersDict: Map<number, any>,
+    H: any | null,
+    tagCentresMm: TagCentres,
+  ) {
+    if (!H || !loadedCorr) {
+      if (readout.length) readout = [];
+      return;
+    }
+    const scale = OUT_W / params.squareMm;
+    const inset = interiorInsetMm();
+    const rows: Readout[] = [];
+    for (const [id, corners] of cornersDict) {
+      if (tagCentresMm.has(id)) continue; // border tags aren't objects
+      if (id < 100 || id >= 200) continue;
+      const [rawX, rawY] = tagInteriorPos(cv, corners, H, scale, inset);
+      rows.push({
+        id,
+        rawX,
+        rawY,
+        calX: loadedCorr.Sx * rawX + loadedCorr.Bx,
+        calY: loadedCorr.Sy * rawY + loadedCorr.By,
+      });
+    }
+    rows.sort((a, b) => a.id - b.id);
+    readout = rows;
+  }
+
+  function useCurrentFit() {
+    if (!lastFit) return;
+    loadedCorr = { Sx: lastFit.Sx, Bx: lastFit.Bx, Sy: lastFit.Sy, By: lastFit.By };
+    loadedSource = 'current session fit';
+  }
+
+  async function loadCalibrationFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const { Sx, Bx, Sy, By } = data;
+      if ([Sx, Bx, Sy, By].some((v) => typeof v !== 'number')) {
+        throw new Error('missing Sx/Bx/Sy/By');
+      }
+      loadedCorr = { Sx, Bx, Sy, By };
+      loadedSource = file.name;
+    } catch (err) {
+      errorMsg = `Could not read calibration: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    input.value = '';
   }
 
   function updateStatus(
@@ -231,18 +316,27 @@
       rectCanvas.width = OUT_W;
       rectCanvas.height = OUT_H;
 
-      const cap = new cv.VideoCapture(video);
+      // Offscreen canvas used to pull frames out of the <video> each tick.
+      const grab = document.createElement('canvas');
+      grab.width = w;
+      grab.height = h;
+      const grabCtx = grab.getContext('2d', { willReadFrequently: true })!;
       const src = new cv.Mat(h, w, cv.CV_8UC4);
       const gray = new cv.Mat();
       running = true;
 
       const loop = () => {
         if (!running) return;
+        // The camera panels are unmounted on the joints/sim tabs — skip the frame.
+        if (mode === 'joints' || mode === 'sim' || !rawCanvas || !rectCanvas) {
+          rafId = requestAnimationFrame(loop);
+          return;
+        }
         const tagCentresMm = boardTagCentres(
           params.squareMm, params.tagMm, params.gapMm, params.nOuter, params.nInner,
         );
         try {
-          processFrame(cap, src, gray, tagCentresMm);
+          processFrame(grabCtx, src, gray, tagCentresMm);
         } catch (err) {
           console.error(err);
         }
@@ -276,6 +370,29 @@
     4-corner perspective calibration.
   </p>
 
+  <!-- Hidden source element; frames are read from it into OpenCV each tick. -->
+  <video bind:this={video} playsinline muted style="display:none"></video>
+
+  <div class="tabs">
+    <button class:active={mode === 'calibrate'} onclick={() => (mode = 'calibrate')}>
+      Calibrate
+    </button>
+    <button class:active={mode === 'test'} onclick={() => (mode = 'test')}>
+      Test calibration
+    </button>
+    <button class:active={mode === 'joints'} onclick={() => (mode = 'joints')}>
+      Joint calibration
+    </button>
+    <button class:active={mode === 'sim'} onclick={() => (mode = 'sim')}>
+      Simulator (IK)
+    </button>
+  </div>
+
+  {#if mode === 'joints'}
+    <JointCalibration />
+  {:else if mode === 'sim'}
+    <Simulator />
+  {:else}
   <div class="layout">
     <div>
       <div class="panels">
@@ -285,16 +402,64 @@
 
       <div class="status {statusClass}">{statusText}</div>
 
-      <div class="controls">
-        <button class="primary" onclick={toggleCalibration} disabled={!running}>
-          {calib.active ? 'Abort calibration' : calib.done ? 'Redo calibration' : 'Start calibration (C)'}
-        </button>
-        <button onclick={recordCorner} disabled={!calib.active}>Record corner (Space)</button>
-        <button onclick={downloadCalibration} disabled={!lastFit}>Download calibration</button>
-      </div>
+      {#if mode === 'calibrate'}
+        <div class="controls">
+          <button class="primary" onclick={toggleCalibration} disabled={!running}>
+            {calib.active ? 'Abort calibration' : calib.done ? 'Redo calibration' : 'Start calibration (C)'}
+          </button>
+          <button onclick={recordCorner} disabled={!calib.active}>Record corner (Space)</button>
+          <button onclick={downloadCalibration} disabled={!lastFit}>Download calibration</button>
+        </div>
 
-      {#if report}
-        <pre class="report">{report}</pre>
+        {#if report}
+          <pre class="report">{report}</pre>
+        {/if}
+      {:else}
+        <div class="controls">
+          <button class="primary" onclick={useCurrentFit} disabled={!lastFit}>
+            Use current session fit
+          </button>
+          <label class="file-btn">
+            Load calibration JSON…
+            <input type="file" accept="application/json,.json" onchange={loadCalibrationFile} />
+          </label>
+        </div>
+
+        {#if loadedCorr}
+          <div class="status ok">
+            Active correction ({loadedSource}):
+            X' = {loadedCorr.Sx.toFixed(4)}·x {loadedCorr.Bx >= 0 ? '+' : '−'} {Math.abs(loadedCorr.Bx).toFixed(2)},
+            Y' = {loadedCorr.Sy.toFixed(4)}·y {loadedCorr.By >= 0 ? '+' : '−'} {Math.abs(loadedCorr.By).toFixed(2)}
+          </div>
+
+          <table class="readout">
+            <thead>
+              <tr><th>Tag</th><th>Raw X</th><th>Raw Y</th><th>Corrected X</th><th>Corrected Y</th></tr>
+            </thead>
+            <tbody>
+              {#if readout.length === 0}
+                <tr><td colspan="5" class="empty">No object tags detected…</td></tr>
+              {:else}
+                {#each readout as r (r.id)}
+                  <tr>
+                    <td>{r.id}</td>
+                    <td>{r.rawX.toFixed(1)}</td>
+                    <td>{r.rawY.toFixed(1)}</td>
+                    <td class="cal">{r.calX.toFixed(1)}</td>
+                    <td class="cal">{r.calY.toFixed(1)}</td>
+                  </tr>
+                {/each}
+              {/if}
+            </tbody>
+          </table>
+        {:else}
+          <p class="hint">
+            Load a calibration to test — either <em>Use current session fit</em> (after running a
+            calibration in the Calibrate tab) or upload a previously downloaded
+            <code>camera_calibration.json</code>. Then hold a tagged block on the board to see its
+            raw and corrected interior position (mm) live.
+          </p>
+        {/if}
       {/if}
 
       {#if errorMsg}
@@ -325,16 +490,26 @@
         <input id="blockD" type="number" bind:value={params.blockD} />
       </div>
 
-      <h2 style="margin-top:1rem">How to calibrate</h2>
-      <p class="hint">
-        Press <kbd>C</kbd> to begin. Place one block (tag ID {params.blockTag}) at each interior
-        corner in order TL → TR → BL → BR, its corner touching the interior corner, then press
-        <kbd>Space</kbd> to record. After 4 corners a per-axis linear fit is computed and can be
-        downloaded as JSON.
-      </p>
+      {#if mode === 'calibrate'}
+        <h2 style="margin-top:1rem">How to calibrate</h2>
+        <p class="hint">
+          Press <kbd>C</kbd> to begin. Place one block (tag ID {params.blockTag}) at each interior
+          corner in order TL → TR → BL → BR, its corner touching the interior corner, then press
+          <kbd>Space</kbd> to record. After 4 corners a per-axis linear fit is computed and can be
+          downloaded as JSON.
+        </p>
+      {:else}
+        <h2 style="margin-top:1rem">How to test</h2>
+        <p class="hint">
+          Load a calibration, then move a tagged block (any bordered ID 100–199) around the board.
+          The table shows each tag's raw detected interior position and the position after applying
+          the linear correction — corrected values should track the block's true mm coordinates.
+        </p>
+      {/if}
       {#if !cvReady}
         <p class="hint">Waiting for OpenCV.js…</p>
       {/if}
     </div>
   </div>
+  {/if}
 </div>

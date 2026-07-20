@@ -57,6 +57,44 @@ function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number
   ctx.fillText(text, x, y);
 }
 
+/** A linear per-axis correction plus the block footprint to draw with it. */
+export interface TestOverlay {
+  corr: { Sx: number; Bx: number; Sy: number; By: number };
+  blockW: number;
+  blockD: number;
+}
+
+/**
+ * Draw a block-sized rectangle centred on an interior-mm point, converting to
+ * warped pixels via `inset`/`scale`. Optionally fills before stroking.
+ */
+function blockRect(
+  ctx: CanvasRenderingContext2D,
+  cxMm: number,
+  cyMm: number,
+  wMm: number,
+  dMm: number,
+  insetMm: number,
+  scale: number,
+  stroke: string,
+  fill?: string,
+) {
+  const cx = (cxMm + insetMm) * scale;
+  const cy = (cyMm + insetMm) * scale;
+  const w = wMm * scale;
+  const d = dMm * scale;
+  const x = cx - w / 2;
+  const y = cy - d / 2;
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, w, d);
+  }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, d);
+  cross(ctx, cx, cy, stroke, 5);
+}
+
 /** Left panel: raw camera frame with detected tags + board outline. */
 export function drawRawPanel(
   cv: Cv,
@@ -115,6 +153,7 @@ export function drawRectifiedPanel(
   tagCentresMm: TagCentres,
   innerTagsStart: number,
   calib: CalibState,
+  test: TestOverlay | null = null,
 ) {
   const canvas = ctx.canvas;
   if (!H) {
@@ -197,6 +236,30 @@ export function drawRectifiedPanel(
     const isCalib = tagId === calib.blockTag;
     const color = isCalib ? AMBER : RED;
 
+    if (test) {
+      // Test mode: show the block footprint at the detected position and at the
+      // corrected position (using the loaded linear calibration).
+      const calX = test.corr.Sx * xInt + test.corr.Bx;
+      const calY = test.corr.Sy * yInt + test.corr.By;
+      // Detected (raw) — amber outline, no fill.
+      blockRect(ctx, xInt, yInt, test.blockW, test.blockD, interiorInsetMm, scale, AMBER);
+      // Corrected — green, translucent fill so it reads as the placed block.
+      blockRect(
+        ctx, calX, calY, test.blockW, test.blockD, interiorInsetMm, scale,
+        'rgb(0,255,0)', 'rgba(0,255,0,0.22)',
+      );
+      const [lx, ly] = [(calX + interiorInsetMm) * scale, (calY + interiorInsetMm) * scale];
+      label(
+        ctx,
+        `ID${tagId} raw=(${xInt.toFixed(1)},${yInt.toFixed(1)}) → (${calX.toFixed(1)},${calY.toFixed(1)})mm`,
+        lx + 4,
+        ly - test.blockD * scale * 0.5 - 4,
+        'rgb(0,255,0)',
+        10,
+      );
+      continue;
+    }
+
     polyline(ctx, bBoard, color);
     cross(ctx, tlBoard[0], tlBoard[1], color, 7);
 
@@ -212,6 +275,21 @@ export function drawRectifiedPanel(
       'rgb(0,255,0)',
       10,
     );
+  }
+
+  // Test-mode legend.
+  if (test) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(6, 6, 150, 42);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(14, 15, 16, 10);
+    label(ctx, 'detected', 38, 24, AMBER, 11);
+    ctx.fillStyle = 'rgba(0,255,0,0.22)';
+    ctx.fillRect(14, 31, 16, 10);
+    ctx.strokeStyle = 'rgb(0,255,0)';
+    ctx.strokeRect(14, 31, 16, 10);
+    label(ctx, 'corrected', 38, 40, 'rgb(0,255,0)', 11);
   }
 
   // Calibration overlays.

@@ -38,10 +38,14 @@ export function detectMarkers(
   const out = new Map<number, Corners>();
   try {
     det.detector.detectMarkers(gray, cornersVec, ids, rejected);
-    const n = ids.rows;
+    // Drive off the corner vector's size; ids may be laid out N×1 or 1×N, so
+    // read it from its flat typed array rather than assuming a shape.
+    const n = cornersVec.size();
+    const idData: Int32Array | undefined = ids.data32S;
     for (let i = 0; i < n; i++) {
-      const id = ids.intAt(i, 0);
       const m = cornersVec.get(i); // 1x4 CV_32FC2
+      if (!m) continue;
+      const id = idData ? idData[i] : ids.intAt(i, 0);
       const d = m.data32F;
       const corners: Corners = [
         [d[0], d[1]],
