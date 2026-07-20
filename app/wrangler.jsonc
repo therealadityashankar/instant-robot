@@ -4,5 +4,10 @@
   "compatibility_date": "2025-01-01",
   "assets": {
     "directory": "./dist"
-  }
+  },
+  // Attaches the custom domain on production `wrangler deploy` (river.berlin must
+  // be on this Cloudflare account — it is). Preview deploys ignore this.
+  "routes": [
+    { "pattern": "instant.river.berlin", "custom_domain": true }
+  ]
 }
