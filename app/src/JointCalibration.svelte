@@ -9,6 +9,7 @@
     simRadToServo,
     type JointCalibration,
   } from './lib/joints';
+  import { saveJointCalibration, loadJointCalibration } from './lib/storage';
 
   const robot = new Robot();
 
@@ -27,8 +28,11 @@
   let realVals: number[] = [];
   let simVals: number[] = [];
 
-  // Finished per-joint calibrations, keyed by joint name.
-  let calibration = $state<Record<string, JointCalibration>>({});
+  // Finished per-joint calibrations, keyed by joint name. Defaults to the last
+  // saved calibration (a supplied file overrides it).
+  const savedJoints = loadJointCalibration();
+  let calibration = $state<Record<string, JointCalibration>>(savedJoints ?? {});
+  let loadedName = $state<string | null>(savedJoints ? 'saved calibration' : null);
 
   let polling = false;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -52,8 +56,6 @@
     }
     pollTimer = setTimeout(pollLoop, 150);
   }
-
-  let loadedName = $state<string | null>(null);
 
   async function connect() {
     error = null;
@@ -81,6 +83,7 @@
       if (typeof parsed !== 'object' || parsed === null) throw new Error('not an object');
       calibration = parsed as Record<string, JointCalibration>;
       loadedName = file.name;
+      saveJointCalibration(calibration); // supplied file becomes the new default
       // Loaded outside an active sweep → show the per-joint table to correct from.
       if (connected && phase === 'calibrating' && queue.length > 1) {
         // don't interrupt an in-progress full sweep
@@ -132,6 +135,7 @@
           ...fit,
         },
       };
+      saveJointCalibration(calibration);
     }
     realVals = [];
     simVals = [];

@@ -10,6 +10,12 @@
   import { MujocoRenderer } from './lib/mujocoRender';
   import { Robot } from './lib/robot';
   import { CALIBRATION_PLAN, simRadToServo, type JointCalibration } from './lib/joints';
+  import {
+    saveBoardCalibration,
+    loadBoardCalibration,
+    saveJointCalibration,
+    loadJointCalibration,
+  } from './lib/storage';
   import { buildBoardSceneXml, interiorToSim, SQUARE_MM, INSET_MM } from './lib/boardSim';
   import { phaseTarget, DEFAULT_PICK, type PickPhase } from './lib/pick';
   import { loadCv, type Cv } from './lib/cv';
@@ -61,8 +67,9 @@
   let mode = $state<'sim' | 'real'>('sim');
   const robot = new Robot();
   let realConnected = $state(false);
-  let jointCal = $state<Record<string, JointCalibration> | null>(null);
-  let jointCalName = $state<string | null>(null);
+  const savedJointCal = loadJointCalibration();
+  let jointCal = $state<Record<string, JointCalibration> | null>(savedJointCal);
+  let jointCalName = $state<string | null>(savedJointCal ? 'saved calibration' : null);
   let realError = $state<string | null>(null);
   let lastSent = 0;
 
@@ -83,8 +90,9 @@
   let graspY = $state(DEFAULT_PICK.graspYOffset);
 
   // Board perspective correction (from the Test-calibration tab's JSON).
-  let boardCorr = $state<{ Sx: number; Bx: number; Sy: number; By: number } | null>(null);
-  let boardCorrName = $state<string | null>(null);
+  const savedBoardCorr = loadBoardCalibration();
+  let boardCorr = $state<{ Sx: number; Bx: number; Sy: number; By: number } | null>(savedBoardCorr);
+  let boardCorrName = $state<string | null>(savedBoardCorr ? 'saved calibration' : null);
 
   // Latest detected block positions (interior mm, corrected) keyed by tag id.
   let detected = $state<Map<number, [number, number]>>(new Map());
@@ -345,6 +353,7 @@
     try {
       jointCal = JSON.parse(await file.text());
       jointCalName = file.name;
+      if (jointCal) saveJointCalibration(jointCal); // becomes the new default
     } catch (err) {
       realError = 'Bad calibration file: ' + (err instanceof Error ? err.message : String(err));
     }
@@ -361,6 +370,7 @@
       if ([Sx, Bx, Sy, By].some((v) => typeof v !== 'number')) throw new Error('missing Sx/Bx/Sy/By');
       boardCorr = { Sx, Bx, Sy, By };
       boardCorrName = file.name;
+      saveBoardCalibration(boardCorr); // becomes the new default
     } catch (err) {
       detectMsg = 'Bad board calibration: ' + (err instanceof Error ? err.message : String(err));
     }

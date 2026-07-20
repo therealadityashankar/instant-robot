@@ -18,6 +18,7 @@
   import { drawRawPanel, drawRectifiedPanel } from './lib/render';
   import { fitLinear2d, formatFitReport, type LinearFit } from './lib/geometry';
   import { DEFAULT_PARAMS, type BoardParams, type CalibState } from './lib/types';
+  import { saveBoardCalibration, loadBoardCalibration } from './lib/storage';
   import JointCalibration from './JointCalibration.svelte';
   import Simulator from './Simulator.svelte';
 
@@ -33,8 +34,10 @@
   // ── Mode: calibrate vs. test an existing calibration ──────────────────────
   type Correction = { Sx: number; Bx: number; Sy: number; By: number };
   let mode = $state<'calibrate' | 'test' | 'joints' | 'sim'>('calibrate');
-  let loadedCorr = $state<Correction | null>(null);
-  let loadedSource = $state<string | null>(null);
+  // Default to the last saved board calibration (a supplied file overrides it).
+  const savedCorr = loadBoardCalibration();
+  let loadedCorr = $state<Correction | null>(savedCorr);
+  let loadedSource = $state<string | null>(savedCorr ? 'saved calibration' : null);
   interface Readout {
     id: number;
     rawX: number;
@@ -133,6 +136,10 @@
       const fit = fitLinear2d(calib.data);
       report = formatFitReport(fit);
       lastFit = fit;
+      // Immediately becomes the active correction (saved + used by default).
+      loadedCorr = { Sx: fit.Sx, Bx: fit.Bx, Sy: fit.Sy, By: fit.By };
+      loadedSource = 'current session fit';
+      saveBoardCalibration(loadedCorr);
     }
   }
 
@@ -236,12 +243,6 @@
     readout = rows;
   }
 
-  function useCurrentFit() {
-    if (!lastFit) return;
-    loadedCorr = { Sx: lastFit.Sx, Bx: lastFit.Bx, Sy: lastFit.Sy, By: lastFit.By };
-    loadedSource = 'current session fit';
-  }
-
   async function loadCalibrationFile(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
@@ -254,6 +255,7 @@
       }
       loadedCorr = { Sx, Bx, Sy, By };
       loadedSource = file.name;
+      saveBoardCalibration(loadedCorr); // supplied file becomes the new default
     } catch (err) {
       errorMsg = `Could not read calibration: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -416,9 +418,6 @@
         {/if}
       {:else}
         <div class="controls">
-          <button class="primary" onclick={useCurrentFit} disabled={!lastFit}>
-            Use current session fit
-          </button>
           <label class="file-btn">
             Load calibration JSON…
             <input type="file" accept="application/json,.json" onchange={loadCalibrationFile} />
@@ -454,10 +453,9 @@
           </table>
         {:else}
           <p class="hint">
-            Load a calibration to test — either <em>Use current session fit</em> (after running a
-            calibration in the Calibrate tab) or upload a previously downloaded
-            <code>camera_calibration.json</code>. Then hold a tagged block on the board to see its
-            raw and corrected interior position (mm) live.
+            No calibration yet — run one in the Calibrate tab (it's used automatically here) or
+            upload a previously downloaded <code>camera_calibration.json</code>. Then hold a tagged
+            block on the board to see its raw and corrected interior position (mm) live.
           </p>
         {/if}
       {/if}
