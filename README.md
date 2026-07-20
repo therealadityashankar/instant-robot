@@ -18,17 +18,25 @@ uv sync
 
 ## Running on the Real Robot
 
-### Step 1, Print the board and block tag
+### Step 1, Print the board and block tags
+
+Print everything in [`printables/`](printables/) — these are committed to the repo,
+so you can print them directly without regenerating:
+
+- [`printables/aruco_board.pdf`](printables/aruco_board.pdf) — the calibration board
+- [`printables/bordered_tags.pdf`](printables/bordered_tags.pdf) — bordered block tags (IDs 100–150)
+- [`printables/bordered_tags_20mm.pdf`](printables/bordered_tags_20mm.pdf) — 20 mm variant
+
+**IMPORTANT: do not scale the pages when printing — print at 100% scale**, or the
+tag geometry won't match the calibration.
+
+To regenerate them from source instead:
 
 ```bash
 uv run python tags-and-borders/make_aruco_board.py   # printables/aruco_board.pdf
-
 uv run python tags-and-borders/make_jenga_tag.py     # printables/jenga_tag.pdf
-
-# Full sheet of general-purpose bordered tags IDs 100–150
 uv run python tags-and-borders/make_bordered_tags.py # printables/bordered_tags.pdf
 ```
-NOTE : IMPORTANT do not  scale the pages while printing them - it needs to be printed at 100% scale, or the exact way it has been created
 
 ### Step 2, calibrate joints
 

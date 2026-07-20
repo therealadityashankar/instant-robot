@@ -16,10 +16,6 @@ recordings/
 data/
 boxes/
 
-# Generated printable assets (reproducible via tags-and-borders/make_*.py)
-printables/
-bordered_tags*.pdf
-bordered_tags*.png
 
 # Calibration outputs and snapshots
 .calibration/
