@@ -18,6 +18,7 @@
   } from './lib/storage';
   import { buildBoardSceneXml, interiorToSim, SQUARE_MM, INSET_MM } from './lib/boardSim';
   import { phaseTarget, DEFAULT_PICK, type PickPhase } from './lib/pick';
+  import LoadingScreen from './LoadingScreen.svelte';
   import { loadCv, type Cv } from './lib/cv';
   import { OUT_W, boardTagCentres, BORDERED_IDS, type TagCentres } from './lib/board';
   import {
@@ -406,7 +407,7 @@
 <div class="sim">
   <div class="viewer" bind:this={wrap}>
     <canvas bind:this={canvas}></canvas>
-    {#if !ready}<div class="overlay">{status}</div>{/if}
+    {#if !ready && !errorMsg}<LoadingScreen message={status} />{/if}
     {#if errorMsg}<div class="overlay err">{errorMsg}</div>{/if}
   </div>
 
@@ -565,7 +566,7 @@
   .viewer canvas {
     width: 100%;
     display: block;
-    border: 1px solid #2a2f38;
+    border: 1px solid var(--line-soft);
     border-radius: 8px;
   }
   .overlay {
@@ -573,11 +574,11 @@
     inset: 0;
     display: grid;
     place-items: center;
-    color: #8b93a1;
+    color: var(--muted);
     font-size: 0.95rem;
   }
   .overlay.err {
-    color: #f87171;
+    color: var(--bad);
     padding: 1rem;
     text-align: center;
   }
@@ -593,8 +594,9 @@
     flex: 1;
   }
   .modeswitch button.active {
-    background: #1f6feb;
-    border-color: #1f6feb;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
   }
   .sliders {
     display: grid;
@@ -604,7 +606,7 @@
   }
   .sliders label {
     font-family: ui-monospace, monospace;
-    color: #8b93a1;
+    color: var(--muted);
   }
   .sliders .val {
     font-family: ui-monospace, monospace;
@@ -618,10 +620,10 @@
     font-size: 0.85rem;
   }
   .ikstatus.ok {
-    color: #4ade80;
+    color: var(--ok);
   }
   .ikstatus.bad {
-    color: #fbbf24;
+    color: var(--warn);
   }
   table.angles {
     width: 100%;
@@ -634,18 +636,18 @@
   table.angles td {
     text-align: right;
     padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid #23282f;
+    border-bottom: 1px solid var(--line-soft);
   }
   table.angles th:first-child,
   table.angles td:first-child {
     text-align: left;
-    color: #8b93a1;
+    color: var(--muted);
   }
   .file-btn {
     display: inline-flex;
     align-items: center;
-    background: #262b33;
-    border: 1px solid #3a414c;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
     border-radius: 6px;
     padding: 0.45rem 0.9rem;
     font-size: 0.85rem;
@@ -662,21 +664,21 @@
   }
   .pickrow label {
     font-size: 0.85rem;
-    color: #8b93a1;
+    color: var(--muted);
   }
   .pickrow input[type='number'] {
     width: 4.5rem;
-    background: #1c2027;
-    color: #e6e6e6;
-    border: 1px solid #3a414c;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line-soft);
     border-radius: 4px;
     padding: 0.25rem 0.4rem;
   }
   .pickrow select {
     flex: 1;
-    background: #1c2027;
-    color: #e6e6e6;
-    border: 1px solid #3a414c;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line-soft);
     border-radius: 4px;
     padding: 0.28rem 0.4rem;
   }

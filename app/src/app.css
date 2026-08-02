@@ -1,6 +1,24 @@
+/* Light "Quicksand" theme — adapted from the roboter project's look
+   (Quicksand font, gray-100 background, white cards with black outlines,
+   green accent). Palette centralised as CSS variables so components share it. */
 :root {
-  font-family: system-ui, -apple-system, sans-serif;
-  color-scheme: dark;
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #f9fafb;
+  --ink: #111827;
+  --muted: #6b7280;
+  --line: #111111; /* black card outlines / dividers */
+  --line-soft: #d1d5db; /* subtle borders (inputs, rows) */
+  --accent: #22c55e; /* green-500 */
+  --accent-hover: #16a34a;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --bad: #dc2626;
+
+  font-family: 'Quicksand', system-ui, -apple-system, sans-serif;
+  font-weight: 300; /* Quicksand light, matching the roboter project */
+  font-optical-sizing: auto;
+  color-scheme: light;
 }
 
 * {
@@ -9,12 +27,16 @@
 
 body {
   margin: 0;
-  background: #14161a;
-  color: #e6e6e6;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Quicksand', system-ui, sans-serif;
+  font-weight: 300;
 }
 
 h1 {
-  font-size: 1.25rem;
+  font-size: 2rem;
+  font-weight: 300;
+  letter-spacing: 0.01em;
   margin: 0 0 0.25rem;
 }
 
@@ -25,7 +47,7 @@ h1 {
 }
 
 .subtitle {
-  color: #8b93a1;
+  color: var(--muted);
   margin: 0 0 1rem;
   font-size: 0.9rem;
 }
@@ -33,7 +55,7 @@ h1 {
 .panels {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
   align-items: flex-start;
 }
 
@@ -41,27 +63,30 @@ h1 {
   background: #000;
   max-width: 100%;
   height: auto;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .status {
   margin-top: 0.75rem;
   padding: 0.6rem 0.8rem;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 0.9rem;
-  font-family: ui-monospace, monospace;
-  background: #1c2027;
-  border: 1px solid #2a2f38;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
 }
 
 .status.ok {
-  border-color: #1f7a1f;
+  border-color: var(--ok);
+  color: var(--ok);
 }
 .status.warn {
-  border-color: #7a5a1f;
+  border-color: var(--warn);
+  color: var(--warn);
 }
 .status.bad {
-  border-color: #7a1f1f;
+  border-color: var(--bad);
+  color: var(--bad);
 }
 
 .controls {
@@ -72,24 +97,32 @@ h1 {
 }
 
 button {
-  background: #262b33;
-  color: #e6e6e6;
-  border: 1px solid #3a414c;
-  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
   padding: 0.45rem 0.9rem;
+  font-family: inherit;
   font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 button:hover {
-  background: #2f353f;
+  background: var(--surface-2);
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 button.primary {
-  background: #1f6feb;
-  border-color: #1f6feb;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .layout {
@@ -105,6 +138,7 @@ button.primary {
 
 .sidebar h2 {
   font-size: 0.95rem;
+  font-weight: 600;
   margin: 0 0 0.5rem;
 }
 
@@ -117,17 +151,18 @@ button.primary {
 }
 .params input {
   width: 5rem;
-  background: #1c2027;
-  color: #e6e6e6;
-  border: 1px solid #3a414c;
-  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
   padding: 0.2rem 0.4rem;
+  font-family: inherit;
 }
 
 pre.report {
-  background: #0f1114;
-  border: 1px solid #2a2f38;
-  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
   padding: 0.75rem;
   font-size: 0.78rem;
   overflow-x: auto;
@@ -135,13 +170,13 @@ pre.report {
 }
 
 .hint {
-  color: #8b93a1;
+  color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.5;
 }
 kbd {
-  background: #262b33;
-  border: 1px solid #3a414c;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
   border-bottom-width: 2px;
   border-radius: 4px;
   padding: 0 0.35rem;
@@ -149,34 +184,19 @@ kbd {
   font-size: 0.8rem;
 }
 
-.tabs {
-  display: flex;
-  gap: 0.25rem;
-  margin-bottom: 0.85rem;
-  border-bottom: 1px solid #2a2f38;
-}
-.tabs button {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  padding: 0.5rem 0.9rem;
-  color: #8b93a1;
-}
-.tabs button.active {
-  color: #e6e6e6;
-  border-bottom-color: #1f6feb;
-}
-
 .file-btn {
   display: inline-flex;
   align-items: center;
-  background: #262b33;
-  border: 1px solid #3a414c;
-  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
   padding: 0.45rem 0.9rem;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
+}
+.file-btn:hover {
+  background: var(--surface-2);
 }
 .file-btn input {
   display: none;
@@ -193,21 +213,102 @@ table.readout th,
 table.readout td {
   text-align: right;
   padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid #23282f;
+  border-bottom: 1px solid var(--line-soft);
 }
 table.readout th:first-child,
 table.readout td:first-child {
   text-align: left;
 }
 table.readout th {
-  color: #8b93a1;
+  color: var(--muted);
   font-weight: 600;
 }
 table.readout td.cal {
-  color: #4ade80;
+  color: var(--accent-hover);
 }
 table.readout td.empty {
   text-align: center;
-  color: #8b93a1;
+  color: var(--muted);
   padding: 1rem;
+}
+
+/* Card used across views. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem 1.2rem;
+}
+
+/* Top bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+button.big {
+  font-size: 1rem;
+  padding: 0.7rem 1.3rem;
+  border-radius: 10px;
+}
+button.botbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+button.botbtn svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* Calibration modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2.5rem 1rem;
+  z-index: 100;
+  overflow-y: auto;
+}
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  width: min(100%, 1180px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.calsteps {
+  display: flex;
+  gap: 0.4rem;
+}
+.calsteps button {
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+.calsteps button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.modal .close {
+  border: none;
+  background: none;
+  font-size: 1.1rem;
+  padding: 0.25rem 0.5rem;
+}
+.modal-body {
+  padding: 1.1rem;
 }

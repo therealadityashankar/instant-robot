@@ -31,9 +31,10 @@
   let statusClass = $state<'ok' | 'warn' | 'bad'>('warn');
   let report = $state<string | null>(null);
 
-  // ── Mode: calibrate vs. test an existing calibration ──────────────────────
+  // ── Calibration modal: board calibrate / test / joint calibration ─────────
   type Correction = { Sx: number; Bx: number; Sy: number; By: number };
-  let mode = $state<'calibrate' | 'test' | 'joints' | 'sim'>('calibrate');
+  let calibrateOpen = $state(false);
+  let calStep = $state<'calibrate' | 'test' | 'joints'>('calibrate');
   // Default to the last saved board calibration (a supplied file overrides it).
   const savedCorr = loadBoardCalibration();
   let loadedCorr = $state<Correction | null>(savedCorr);
@@ -200,7 +201,7 @@
     const rectCtx = rectCanvas.getContext('2d')!;
     drawRawPanel(cv, rawCtx, video, cornersDict, tagCentresMm, H, params.squareMm);
     const testOverlay =
-      mode === 'test' && loadedCorr
+      calStep === 'test' && loadedCorr
         ? { corr: loadedCorr, blockW: params.blockW, blockD: params.blockD }
         : null;
     drawRectifiedPanel(
@@ -210,7 +211,7 @@
 
     updateStatus(cornersDict, tagCentresMm, inliers, !!H);
 
-    if (mode === 'test') computeReadout(cornersDict, H, tagCentresMm);
+    if (calStep === 'test') computeReadout(cornersDict, H, tagCentresMm);
     else if (readout.length) readout = [];
   }
 
@@ -299,7 +300,13 @@
     }
   }
 
-  async function start() {
+  let camSrc: any = null;
+  let camGray: any = null;
+
+  // The camera runs only while the calibration modal is open (on a camera step),
+  // so it's released for the Simulator's real-mode detection when the modal closes.
+  async function startCamera() {
+    if (running) return;
     try {
       cv = await loadCv();
       cvReady = true;
@@ -313,32 +320,32 @@
 
       const w = video.videoWidth || 640;
       const h = video.videoHeight || 480;
-      rawCanvas.width = w;
-      rawCanvas.height = h;
-      rectCanvas.width = OUT_W;
-      rectCanvas.height = OUT_H;
-
-      // Offscreen canvas used to pull frames out of the <video> each tick.
       const grab = document.createElement('canvas');
       grab.width = w;
       grab.height = h;
       const grabCtx = grab.getContext('2d', { willReadFrequently: true })!;
-      const src = new cv.Mat(h, w, cv.CV_8UC4);
-      const gray = new cv.Mat();
+      camSrc = new cv.Mat(h, w, cv.CV_8UC4);
+      camGray = new cv.Mat();
       running = true;
 
       const loop = () => {
         if (!running) return;
-        // The camera panels are unmounted on the joints/sim tabs — skip the frame.
-        if (mode === 'joints' || mode === 'sim' || !rawCanvas || !rectCanvas) {
+        // Skip when the camera panels aren't mounted (joints step / closed).
+        if (calStep === 'joints' || !rawCanvas || !rectCanvas) {
           rafId = requestAnimationFrame(loop);
           return;
+        }
+        if (rawCanvas.width !== w) {
+          rawCanvas.width = w;
+          rawCanvas.height = h;
+          rectCanvas.width = OUT_W;
+          rectCanvas.height = OUT_H;
         }
         const tagCentresMm = boardTagCentres(
           params.squareMm, params.tagMm, params.gapMm, params.nOuter, params.nInner,
         );
         try {
-          processFrame(grabCtx, src, gray, tagCentresMm);
+          processFrame(grabCtx, camSrc, camGray, tagCentresMm);
         } catch (err) {
           console.error(err);
         }
@@ -352,50 +359,94 @@
     }
   }
 
+  function stopCamera() {
+    running = false;
+    cancelAnimationFrame(rafId);
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+    try {
+      camSrc?.delete();
+      camGray?.delete();
+    } catch {
+      /* ignore */
+    }
+    camSrc = null;
+    camGray = null;
+  }
+
   onMount(() => {
     window.addEventListener('keydown', onKey);
-    start();
     return () => {
-      running = false;
-      cancelAnimationFrame(rafId);
+      stopCamera();
       window.removeEventListener('keydown', onKey);
-      stream?.getTracks().forEach((t) => t.stop());
       if (lastH) lastH.delete();
     };
+  });
+
+  // Start the camera when the calibration modal opens; release it when it closes.
+  $effect(() => {
+    if (calibrateOpen) startCamera();
+    else stopCamera();
   });
 </script>
 
 <div class="app">
-  <h1>instant-robot · board calibration</h1>
-  <p class="subtitle">
-    Browser port of <code>calibration/calibrate_board.py</code> — live homography viewer &amp;
-    4-corner perspective calibration.
-  </p>
+  <header class="topbar">
+    <div>
+      <h1>Instant Robot</h1>
+      <p class="subtitle">SO-101 inverse-kinematics simulator &amp; calibration</p>
+    </div>
+    <button class="primary big botbtn" onclick={() => (calibrateOpen = true)}>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" />
+        <path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
+      </svg>
+      Connect and calibrate!
+    </button>
+  </header>
 
   <!-- Hidden source element; frames are read from it into OpenCV each tick. -->
   <video bind:this={video} playsinline muted style="display:none"></video>
 
-  <div class="tabs">
-    <button class:active={mode === 'calibrate'} onclick={() => (mode = 'calibrate')}>
-      Calibrate
-    </button>
-    <button class:active={mode === 'test'} onclick={() => (mode = 'test')}>
-      Test calibration
-    </button>
-    <button class:active={mode === 'joints'} onclick={() => (mode = 'joints')}>
-      Joint calibration
-    </button>
-    <button class:active={mode === 'sim'} onclick={() => (mode = 'sim')}>
-      Simulator (IK)
-    </button>
-  </div>
+  <Simulator />
+</div>
 
-  {#if mode === 'joints'}
-    <JointCalibration />
-  {:else if mode === 'sim'}
-    <Simulator />
-  {:else}
-  <div class="layout">
+{#if calibrateOpen}
+  <div
+    class="modal-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={() => (calibrateOpen = false)}
+    onkeydown={(e) => e.key === 'Escape' && (calibrateOpen = false)}
+  >
+    <div class="modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+      <div class="modal-head">
+        <div class="calsteps">
+          <button class:active={calStep === 'calibrate'} onclick={() => (calStep = 'calibrate')}>
+            1 · Board
+          </button>
+          <button class:active={calStep === 'test'} onclick={() => (calStep = 'test')}>
+            2 · Test
+          </button>
+          <button class:active={calStep === 'joints'} onclick={() => (calStep = 'joints')}>
+            3 · Joints
+          </button>
+        </div>
+        <button class="close" onclick={() => (calibrateOpen = false)}>✕</button>
+      </div>
+
+      <div class="modal-body">
+        {#if calStep === 'joints'}
+          <JointCalibration />
+        {:else}
+          <div class="layout">
     <div>
       <div class="panels">
         <canvas bind:this={rawCanvas} width="640" height="480"></canvas>
@@ -404,7 +455,7 @@
 
       <div class="status {statusClass}">{statusText}</div>
 
-      {#if mode === 'calibrate'}
+      {#if calStep === 'calibrate'}
         <div class="controls">
           <button class="primary" onclick={toggleCalibration} disabled={!running}>
             {calib.active ? 'Abort calibration' : calib.done ? 'Redo calibration' : 'Start calibration (C)'}
@@ -488,7 +539,7 @@
         <input id="blockD" type="number" bind:value={params.blockD} />
       </div>
 
-      {#if mode === 'calibrate'}
+      {#if calStep === 'calibrate'}
         <h2 style="margin-top:1rem">How to calibrate</h2>
         <p class="hint">
           Press <kbd>C</kbd> to begin. Place one block (tag ID {params.blockTag}) at each interior
@@ -509,5 +560,8 @@
       {/if}
     </div>
   </div>
-  {/if}
-</div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

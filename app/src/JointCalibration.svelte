@@ -516,8 +516,8 @@
   .capture,
   .results,
   .verify {
-    background: #1c2027;
-    border: 1px solid #2a2f38;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
     border-radius: 8px;
     padding: 1rem 1.2rem;
     margin-bottom: 1rem;
@@ -537,27 +537,27 @@
     font-size: 0.8rem;
     padding: 0.25rem 0.6rem;
     border-radius: 999px;
-    border: 1px solid #2a2f38;
+    border: 1px solid var(--line-soft);
   }
   .pill.ok {
-    color: #4ade80;
-    border-color: #1f7a1f;
+    color: var(--ok);
+    border-color: var(--ok);
   }
   .progress {
-    color: #8b93a1;
+    color: var(--muted);
     font-size: 0.85rem;
     margin-bottom: 0.25rem;
   }
   .desc {
-    color: #b8bfc9;
+    color: var(--ink);
     margin: 0 0 1rem;
   }
   .dim {
-    color: #8b93a1;
+    color: var(--muted);
   }
   .target {
-    background: #0f1114;
-    border: 1px solid #2a2f38;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
     border-radius: 6px;
     padding: 0.8rem 1rem;
     margin-bottom: 0.9rem;
@@ -569,7 +569,7 @@
     font-family: ui-monospace, monospace;
     font-size: 1.4rem;
     margin-top: 0.25rem;
-    color: #ffd24a;
+    color: var(--warn);
   }
   .live {
     font-family: ui-monospace, monospace;
@@ -577,11 +577,11 @@
   }
   .live-val {
     font-size: 1.3rem;
-    color: #4ade80;
+    color: var(--ok);
     margin-left: 0.4rem;
   }
   .warn-text {
-    color: #ffb454;
+    color: var(--warn);
   }
   .mini {
     padding: 0.2rem 0.6rem;
@@ -590,8 +590,8 @@
   .file-btn {
     display: inline-flex;
     align-items: center;
-    background: #262b33;
-    border: 1px solid #3a414c;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
     border-radius: 6px;
     padding: 0.45rem 0.9rem;
     font-size: 0.85rem;
@@ -605,10 +605,10 @@
     display: none;
   }
   tr.activerow {
-    background: rgba(31, 111, 235, 0.12);
+    background: rgba(34,197,94,0.12);
   }
   tr.activerow td {
-    color: #7cc0ff;
+    color: var(--accent-hover);
   }
   .jsliders {
     display: grid;
@@ -620,7 +620,7 @@
   .jsliders label {
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
-    color: #b8bfc9;
+    color: var(--ink);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -633,7 +633,7 @@
   .jsliders .tick {
     font-family: ui-monospace, monospace;
     font-size: 0.78rem;
-    color: #4ade80;
+    color: var(--ok);
     text-align: right;
   }
 </style>
