@@ -12,13 +12,22 @@
     createDetector,
     detectMarkers,
     computeHomography,
-    tagInteriorPos,
     type Detector,
   } from './lib/homography';
   import { drawRawPanel, drawRectifiedPanel } from './lib/render';
-  import { fitLinear2d, formatFitReport, type LinearFit } from './lib/geometry';
   import { DEFAULT_PARAMS, type BoardParams, type CalibState } from './lib/types';
-  import { saveBoardCalibration, loadBoardCalibration } from './lib/storage';
+  import { saveIntrinsics, loadIntrinsics } from './lib/storage';
+  import { solvePnpTvec, meanStd } from './lib/pose';
+  import { boardPoseFromTags, blockBoardXY } from './lib/detect3d';
+  import { BORDERED_IDS } from './lib/board';
+  import {
+    createCharucoBoard,
+    createCharucoDetector,
+    detectView,
+    calibrateIntrinsics,
+    type CharucoView,
+    type Intrinsics,
+  } from './lib/charuco';
   import JointCalibration from './JointCalibration.svelte';
   import Simulator from './Simulator.svelte';
 
@@ -29,24 +38,182 @@
   let running = $state(false);
   let statusText = $state('Loading OpenCV.js…');
   let statusClass = $state<'ok' | 'warn' | 'bad'>('warn');
-  let report = $state<string | null>(null);
 
-  // ── Calibration modal: board calibrate / test / joint calibration ─────────
-  type Correction = { Sx: number; Bx: number; Sy: number; By: number };
+  // ── Calibration modal: camera intrinsics / detect / joint calibration ─────
   let calibrateOpen = $state(false);
-  let calStep = $state<'calibrate' | 'test' | 'joints'>('calibrate');
-  // Default to the last saved board calibration (a supplied file overrides it).
-  const savedCorr = loadBoardCalibration();
-  let loadedCorr = $state<Correction | null>(savedCorr);
-  let loadedSource = $state<string | null>(savedCorr ? 'saved calibration' : null);
+  let calStep = $state<'intrinsics' | 'test' | 'joints'>('intrinsics');
+
+  // ── Camera intrinsics (ChArUco) ───────────────────────────────────────────
+  let intrinsics = $state<Intrinsics | null>(loadIntrinsics());
+  let charucoBoard: any = null;
+  let charucoDetector: any = null;
+  let charucoViews: CharucoView[] = [];
+  let charucoViewCount = $state(0);
+  let charucoLiveCorners = $state(0);
+  let intrinsicsMsg = $state<string | null>(null);
   interface Readout {
     id: number;
-    rawX: number;
-    rawY: number;
-    calX: number;
-    calY: number;
+    x: number; // board-mm X (solvePnP)
+    y: number; // board-mm Y (solvePnP)
   }
   let readout = $state<Readout[]>([]);
+
+  // ── Detection-noise logger ────────────────────────────────────────────────
+  const MEASURE_N = 200;
+  let measuring = $state(false);
+  let measureLeft = $state(0);
+  let measureResult = $state<string | null>(null);
+  let markerMm = $state(15); // block ArUco marker size (black square, not white border)
+  const samp = {
+    bx: [] as number[], // board-mm X (the actual output)
+    by: [] as number[], // board-mm Y
+    cz: [] as number[], // camera-frame depth (informational)
+  };
+
+  function startMeasure() {
+    if (!intrinsics) return;
+    samp.bx = [];
+    samp.by = [];
+    samp.cz = [];
+    measureLeft = MEASURE_N;
+    measureResult = null;
+    measuring = true;
+  }
+
+  /** Each frame while measuring: record the selected block's board-mm position. */
+  function recordSample(cornersDict: Map<number, any>) {
+    if (!intrinsics) return;
+    const corners = cornersDict.get(params.blockTag);
+    if (!corners || !BORDERED_IDS.has(params.blockTag)) return;
+    const tagCentresMm = boardTagCentres(
+      params.squareMm, params.tagMm, params.gapMm, params.nOuter, params.nInner,
+    );
+    const pose = boardPoseFromTags(cv, cornersDict, tagCentresMm, params.tagMm, intrinsics, camW, camH);
+    if (!pose) return;
+    const xy = blockBoardXY(cv, corners, markerMm, intrinsics, camW, camH, pose);
+    if (!xy) return;
+    samp.bx.push(xy.x);
+    samp.by.push(xy.y);
+    const t = solvePnpTvec(cv, corners, markerMm, camW, camH, intrinsics);
+    if (t) samp.cz.push(t[2]);
+
+    measureLeft -= 1;
+    if (measureLeft <= 0) finishMeasure();
+  }
+
+  function finishMeasure() {
+    measuring = false;
+    const f = (v: number) => (Number.isFinite(v) ? v.toFixed(2) : '—');
+    const f3 = (v: number) => (Number.isFinite(v) ? v.toFixed(3) : '—');
+    const bx = meanStd(samp.bx);
+    const by = meanStd(samp.by);
+    const cz = meanStd(samp.cz);
+    measureResult =
+      `Samples: ${samp.bx.length}   intrinsics RMS ${intrinsics?.rms.toFixed(2) ?? '—'}px, marker ${markerMm}mm\n\n` +
+      `solvePnP board position (board mm) — what actually drives picking\n` +
+      `  X: mean ${f(bx.mean)}  std ±${f3(bx.std)} mm\n` +
+      `  Y: mean ${f(by.mean)}  std ±${f3(by.std)} mm\n\n` +
+      `Camera depth (informational): mean ${f(cz.mean)}mm  std ±${f3(cz.std)}mm\n` +
+      `(depth mean ≈ camera-to-board distance; std is the noisy axis we discard)`;
+  }
+
+  // ── ChArUco intrinsic-calibration frame processing ────────────────────────
+  function processCharucoFrame(grabCtx: CanvasRenderingContext2D) {
+    if (!charucoBoard) {
+      charucoBoard = createCharucoBoard(cv);
+      charucoDetector = createCharucoDetector(cv, charucoBoard);
+    }
+    const { width, height } = grabCtx.canvas;
+    grabCtx.drawImage(video, 0, 0, width, height);
+    camSrc.data.set(grabCtx.getImageData(0, 0, width, height).data);
+    cv.cvtColor(camSrc, camGray, cv.COLOR_RGBA2GRAY);
+
+    const ctx = rawCanvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0, rawCanvas.width, rawCanvas.height);
+
+    // Detect + draw the charuco corners as a live preview. Also pull out the
+    // marker detections so we can tell "no markers found" from "markers found
+    // but corners didn't interpolate".
+    const corners = new cv.Mat();
+    const ids = new cv.Mat();
+    const markerCorners = new cv.MatVector();
+    const markerIds = new cv.Mat();
+    let nMarkers = 0;
+    try {
+      charucoDetector.detectBoard(camGray, corners, ids, markerCorners, markerIds);
+      // OpenCV.js returns 1×N Mats — count with total(), not rows.
+      charucoLiveCorners = ids.total?.() || 0;
+      nMarkers = markerIds.total?.() || 0;
+      // Draw detected marker outlines (amber) …
+      ctx.strokeStyle = 'rgb(217,119,6)';
+      ctx.lineWidth = 2;
+      for (let m = 0; m < markerCorners.size(); m++) {
+        const mc = markerCorners.get(m);
+        const md = mc.data32F as Float32Array;
+        ctx.beginPath();
+        ctx.moveTo(md[0], md[1]);
+        for (let k = 1; k < 4; k++) ctx.lineTo(md[k * 2], md[k * 2 + 1]);
+        ctx.closePath();
+        ctx.stroke();
+        mc.delete();
+      }
+      // … and charuco corners (green).
+      const d = corners.data32F as Float32Array;
+      ctx.fillStyle = 'rgb(34,197,94)';
+      for (let i = 0; i < charucoLiveCorners; i++) {
+        ctx.beginPath();
+        ctx.arc(d[i * 2], d[i * 2 + 1], 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } catch (e) {
+      charucoLiveCorners = 0;
+      intrinsicsMsg = 'detectBoard error: ' + (e instanceof Error ? e.message : String(e));
+    } finally {
+      corners.delete();
+      ids.delete();
+      markerCorners.delete();
+      markerIds.delete();
+    }
+    statusText = `Markers: ${nMarkers}   ChArUco corners: ${charucoLiveCorners}   (need the board in view)`;
+    statusClass = charucoLiveCorners >= 6 ? 'ok' : nMarkers > 0 ? 'warn' : 'bad';
+  }
+
+  function captureCharucoView() {
+    if (!charucoDetector) return;
+    const v = detectView(cv, charucoDetector, charucoBoard, camGray);
+    if (!v) {
+      intrinsicsMsg = 'No board detected — get the full ChArUco board in frame.';
+      return;
+    }
+    charucoViews.push(v);
+    charucoViewCount = charucoViews.length;
+    intrinsicsMsg = `Captured view ${charucoViewCount} (${v.n} corners). Tilt/move the board and capture again.`;
+  }
+
+  function runIntrinsicsCalibration() {
+    if (charucoViews.length < 5) {
+      intrinsicsMsg = `Need at least 5 views from different angles (have ${charucoViews.length}).`;
+      return;
+    }
+    try {
+      const intr = calibrateIntrinsics(cv, charucoViews, camW, camH);
+      intrinsics = intr;
+      saveIntrinsics(intr);
+      const fx = intr.cameraMatrix[0];
+      const fy = intr.cameraMatrix[4];
+      intrinsicsMsg =
+        `Calibrated from ${charucoViews.length} views — RMS reprojection ${intr.rms.toFixed(3)} px\n` +
+        `fx=${fx.toFixed(1)}  fy=${fy.toFixed(1)}  saved. solvePnP now uses these intrinsics.`;
+    } catch (e) {
+      intrinsicsMsg = 'Calibration failed: ' + (e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function resetIntrinsicsViews() {
+    charucoViews = [];
+    charucoViewCount = 0;
+    intrinsicsMsg = null;
+  }
 
   let rawCanvas: HTMLCanvasElement;
   let rectCanvas: HTMLCanvasElement;
@@ -96,85 +263,6 @@
   let lastH: any = null;
   let lastHValid = false;
 
-  // ── Calibration control ───────────────────────────────────────────────────
-  function toggleCalibration() {
-    const start = !calib.active || calib.done;
-    calib.active = start;
-    calib.done = false;
-    calib.step = 0;
-    calib.data = [];
-    calib.donePx = [];
-    calib.cornerPositions = cornerPositions();
-    calib.blockTag = params.blockTag;
-    calib.blockW = params.blockW;
-    calib.blockD = params.blockD;
-    if (!start) report = null;
-  }
-
-  function recordCorner() {
-    if (!calib.active || calib.done) return;
-    const step = calib.step;
-    if (!lastHValid || !lastH) {
-      statusText = `[${'TLTRBLBR'.slice(step * 2, step * 2 + 2)}] No homography — need more border tags`;
-      return;
-    }
-    const corners = lastCorners.get(params.blockTag);
-    if (!corners) {
-      statusText = `Tag ID ${params.blockTag} not detected`;
-      return;
-    }
-    const scale = OUT_W / params.squareMm;
-    const [ox, oy] = tagInteriorPos(cv, corners, lastH, scale, interiorInsetMm());
-    const [trueX, trueY] = calib.cornerPositions[step];
-    calib.data.push([trueX, trueY, ox, oy, params.blockHeight]);
-    const insetPx = Math.round(interiorInsetMm() * scale);
-    calib.donePx.push([insetPx + trueX * scale, insetPx + trueY * scale]);
-    calib.step += 1;
-
-    if (calib.step >= 4) {
-      calib.active = false;
-      calib.done = true;
-      const fit = fitLinear2d(calib.data);
-      report = formatFitReport(fit);
-      lastFit = fit;
-      // Immediately becomes the active correction (saved + used by default).
-      loadedCorr = { Sx: fit.Sx, Bx: fit.Bx, Sy: fit.Sy, By: fit.By };
-      loadedSource = 'current session fit';
-      saveBoardCalibration(loadedCorr);
-    }
-  }
-
-  let lastFit: LinearFit | null = $state(null);
-
-  function downloadCalibration() {
-    if (!lastFit) return;
-    const payload = {
-      Sx: lastFit.Sx,
-      Bx: lastFit.Bx,
-      Sy: lastFit.Sy,
-      By: lastFit.By,
-      rms: lastFit.rms,
-      measurements: lastFit.measurements,
-      params,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'camera_calibration.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement) return;
-    if (e.key === 'c' || e.key === 'C') toggleCalibration();
-    else if (e.key === ' ') {
-      e.preventDefault();
-      recordCorner();
-    }
-  }
-
   // ── Main loop ─────────────────────────────────────────────────────────────
   function processFrame(
     grabCtx: CanvasRenderingContext2D,
@@ -199,68 +287,41 @@
 
     const rawCtx = rawCanvas.getContext('2d')!;
     const rectCtx = rectCanvas.getContext('2d')!;
+    // Homography is kept ONLY for the bird's-eye visualization (no calibration).
     drawRawPanel(cv, rawCtx, video, cornersDict, tagCentresMm, H, params.squareMm);
-    const testOverlay =
-      calStep === 'test' && loadedCorr
-        ? { corr: loadedCorr, blockW: params.blockW, blockD: params.blockD }
-        : null;
     drawRectifiedPanel(
       cv, rectCtx, src, H, params.squareMm, params.tagMm, params.gapMm,
-      cornersDict, tagCentresMm, innerTagsStart(), calib, testOverlay,
+      cornersDict, tagCentresMm, innerTagsStart(), calib, null,
     );
 
     updateStatus(cornersDict, tagCentresMm, inliers, !!H);
 
-    if (calStep === 'test') computeReadout(cornersDict, H, tagCentresMm);
+    if (calStep === 'test') computeReadout(cornersDict, tagCentresMm);
     else if (readout.length) readout = [];
+
+    if (measuring) recordSample(cornersDict);
   }
 
-  /** In test mode, apply the loaded correction to every detected object tag. */
-  function computeReadout(
-    cornersDict: Map<number, any>,
-    H: any | null,
-    tagCentresMm: TagCentres,
-  ) {
-    if (!H || !loadedCorr) {
+  /** solvePnP board-frame positions for every detected object tag (board mm). */
+  function computeReadout(cornersDict: Map<number, any>, tagCentresMm: TagCentres) {
+    if (!intrinsics) {
       if (readout.length) readout = [];
       return;
     }
-    const scale = OUT_W / params.squareMm;
-    const inset = interiorInsetMm();
+    const pose = boardPoseFromTags(cv, cornersDict, tagCentresMm, params.tagMm, intrinsics, camW, camH);
+    if (!pose) {
+      if (readout.length) readout = [];
+      return;
+    }
     const rows: Readout[] = [];
     for (const [id, corners] of cornersDict) {
       if (tagCentresMm.has(id)) continue; // border tags aren't objects
       if (id < 100 || id >= 200) continue;
-      const [rawX, rawY] = tagInteriorPos(cv, corners, H, scale, inset);
-      rows.push({
-        id,
-        rawX,
-        rawY,
-        calX: loadedCorr.Sx * rawX + loadedCorr.Bx,
-        calY: loadedCorr.Sy * rawY + loadedCorr.By,
-      });
+      const xy = blockBoardXY(cv, corners, markerMm, intrinsics, camW, camH, pose);
+      if (xy) rows.push({ id, x: xy.x, y: xy.y });
     }
     rows.sort((a, b) => a.id - b.id);
     readout = rows;
-  }
-
-  async function loadCalibrationFile(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    try {
-      const data = JSON.parse(await file.text());
-      const { Sx, Bx, Sy, By } = data;
-      if ([Sx, Bx, Sy, By].some((v) => typeof v !== 'number')) {
-        throw new Error('missing Sx/Bx/Sy/By');
-      }
-      loadedCorr = { Sx, Bx, Sy, By };
-      loadedSource = file.name;
-      saveBoardCalibration(loadedCorr); // supplied file becomes the new default
-    } catch (err) {
-      errorMsg = `Could not read calibration: ${err instanceof Error ? err.message : String(err)}`;
-    }
-    input.value = '';
   }
 
   function updateStatus(
@@ -276,32 +337,20 @@
       else if (id >= 100 && id < 200) nObj++;
     }
 
-    if (calib.done) {
-      statusText = 'Calibration complete — download below. C=redo';
-      statusClass = 'ok';
-    } else if (calib.active) {
-      const step = calib.step;
-      const name = ['TL', 'TR', 'BL', 'BR'][step];
-      const [tx, ty] = calib.cornerPositions[step];
-      const hasTag = cornersDict.has(params.blockTag) && hasH;
-      let obs = '';
-      if (hasTag) {
-        const scale = OUT_W / params.squareMm;
-        const [ox, oy] = tagInteriorPos(
-          cv, cornersDict.get(params.blockTag), lastH, scale, interiorInsetMm(),
-        );
-        obs = `  obs=(${ox.toFixed(1)},${oy.toFixed(1)})`;
-      }
-      statusText = `Corner ${step + 1}/4: place block at ${name} — tag→(${tx.toFixed(1)},${ty.toFixed(1)})mm${obs}  SPACE=record  C=abort`;
-      statusClass = hasTag ? 'ok' : 'warn';
+    if (!intrinsics) {
+      statusText = 'Calibrate the camera (ChArUco) first — needed for solvePnP positions.';
+      statusClass = 'bad';
     } else {
-      statusText = `Border: ${nBorder}/${tagCentresMm.size}  Inliers: ${hasH ? inliers : 0}  Objects: ${nObj}  ${hasH ? '[OK]' : '[NO HOMOGRAPHY]'}  C=calibrate`;
-      statusClass = hasH ? 'ok' : 'bad';
+      statusText = `Border tags: ${nBorder}/${tagCentresMm.size}  Objects: ${nObj}  ${hasH ? '[board OK]' : '[need ≥4 border tags]'}`;
+      statusClass = hasH ? 'ok' : 'warn';
     }
+    void inliers;
   }
 
   let camSrc: any = null;
   let camGray: any = null;
+  let camW = 640;
+  let camH = 480;
 
   // The camera runs only while the calibration modal is open (on a camera step),
   // so it's released for the Simulator's real-mode detection when the modal closes.
@@ -320,6 +369,8 @@
 
       const w = video.videoWidth || 640;
       const h = video.videoHeight || 480;
+      camW = w;
+      camH = h;
       const grab = document.createElement('canvas');
       grab.width = w;
       grab.height = h;
@@ -341,11 +392,15 @@
           rectCanvas.width = OUT_W;
           rectCanvas.height = OUT_H;
         }
-        const tagCentresMm = boardTagCentres(
-          params.squareMm, params.tagMm, params.gapMm, params.nOuter, params.nInner,
-        );
         try {
-          processFrame(grabCtx, camSrc, camGray, tagCentresMm);
+          if (calStep === 'intrinsics') {
+            processCharucoFrame(grabCtx);
+          } else {
+            const tagCentresMm = boardTagCentres(
+              params.squareMm, params.tagMm, params.gapMm, params.nOuter, params.nInner,
+            );
+            processFrame(grabCtx, camSrc, camGray, tagCentresMm);
+          }
         } catch (err) {
           console.error(err);
         }
@@ -375,10 +430,8 @@
   }
 
   onMount(() => {
-    window.addEventListener('keydown', onKey);
     return () => {
       stopCamera();
-      window.removeEventListener('keydown', onKey);
       if (lastH) lastH.delete();
     };
   });
@@ -429,11 +482,11 @@
     <div class="modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       <div class="modal-head">
         <div class="calsteps">
-          <button class:active={calStep === 'calibrate'} onclick={() => (calStep = 'calibrate')}>
-            1 · Board
+          <button class:active={calStep === 'intrinsics'} onclick={() => (calStep = 'intrinsics')}>
+            1 · Camera (ChArUco)
           </button>
           <button class:active={calStep === 'test'} onclick={() => (calStep = 'test')}>
-            2 · Test
+            2 · Detect
           </button>
           <button class:active={calStep === 'joints'} onclick={() => (calStep = 'joints')}>
             3 · Joints
@@ -455,60 +508,56 @@
 
       <div class="status {statusClass}">{statusText}</div>
 
-      {#if calStep === 'calibrate'}
+      {#if calStep === 'intrinsics'}
         <div class="controls">
-          <button class="primary" onclick={toggleCalibration} disabled={!running}>
-            {calib.active ? 'Abort calibration' : calib.done ? 'Redo calibration' : 'Start calibration (C)'}
+          <button class="primary" onclick={captureCharucoView} disabled={charucoLiveCorners < 6}>
+            Capture view ({charucoViewCount})
           </button>
-          <button onclick={recordCorner} disabled={!calib.active}>Record corner (Space)</button>
-          <button onclick={downloadCalibration} disabled={!lastFit}>Download calibration</button>
+          <button onclick={runIntrinsicsCalibration} disabled={charucoViewCount < 5}>
+            Calibrate camera
+          </button>
+          <button onclick={resetIntrinsicsViews} disabled={charucoViewCount === 0}>Reset</button>
         </div>
-
-        {#if report}
-          <pre class="report">{report}</pre>
+        {#if intrinsicsMsg}
+          <pre class="report">{intrinsicsMsg}</pre>
+        {:else if intrinsics}
+          <div class="status ok">
+            Using saved intrinsics (RMS {intrinsics.rms.toFixed(3)} px). Recalibrate to replace.
+          </div>
         {/if}
       {:else}
+        <!-- Detect step: solvePnP board-frame positions -->
+        {#if !intrinsics}
+          <div class="status bad">Calibrate the camera (ChArUco step) first.</div>
+        {/if}
         <div class="controls">
-          <label class="file-btn">
-            Load calibration JSON…
-            <input type="file" accept="application/json,.json" onchange={loadCalibrationFile} />
-          </label>
+          <button onclick={startMeasure} disabled={!intrinsics || measuring}>
+            {measuring ? `Measuring… ${measureLeft}` : `Measure noise (block ${params.blockTag})`}
+          </button>
         </div>
 
-        {#if loadedCorr}
-          <div class="status ok">
-            Active correction ({loadedSource}):
-            X' = {loadedCorr.Sx.toFixed(4)}·x {loadedCorr.Bx >= 0 ? '+' : '−'} {Math.abs(loadedCorr.Bx).toFixed(2)},
-            Y' = {loadedCorr.Sy.toFixed(4)}·y {loadedCorr.By >= 0 ? '+' : '−'} {Math.abs(loadedCorr.By).toFixed(2)}
-          </div>
-
-          <table class="readout">
-            <thead>
-              <tr><th>Tag</th><th>Raw X</th><th>Raw Y</th><th>Corrected X</th><th>Corrected Y</th></tr>
-            </thead>
-            <tbody>
-              {#if readout.length === 0}
-                <tr><td colspan="5" class="empty">No object tags detected…</td></tr>
-              {:else}
-                {#each readout as r (r.id)}
-                  <tr>
-                    <td>{r.id}</td>
-                    <td>{r.rawX.toFixed(1)}</td>
-                    <td>{r.rawY.toFixed(1)}</td>
-                    <td class="cal">{r.calX.toFixed(1)}</td>
-                    <td class="cal">{r.calY.toFixed(1)}</td>
-                  </tr>
-                {/each}
-              {/if}
-            </tbody>
-          </table>
-        {:else}
-          <p class="hint">
-            No calibration yet — run one in the Calibrate tab (it's used automatically here) or
-            upload a previously downloaded <code>camera_calibration.json</code>. Then hold a tagged
-            block on the board to see its raw and corrected interior position (mm) live.
-          </p>
+        {#if measureResult}
+          <pre class="report">{measureResult}</pre>
         {/if}
+
+        <table class="readout">
+          <thead>
+            <tr><th>Tag</th><th>Board X (mm)</th><th>Board Y (mm)</th></tr>
+          </thead>
+          <tbody>
+            {#if readout.length === 0}
+              <tr><td colspan="3" class="empty">No object tags detected…</td></tr>
+            {:else}
+              {#each readout as r (r.id)}
+                <tr>
+                  <td>{r.id}</td>
+                  <td class="cal">{r.x.toFixed(1)}</td>
+                  <td class="cal">{r.y.toFixed(1)}</td>
+                </tr>
+              {/each}
+            {/if}
+          </tbody>
+        </table>
       {/if}
 
       {#if errorMsg}
@@ -539,20 +588,21 @@
         <input id="blockD" type="number" bind:value={params.blockD} />
       </div>
 
-      {#if calStep === 'calibrate'}
-        <h2 style="margin-top:1rem">How to calibrate</h2>
+      {#if calStep === 'intrinsics'}
+        <h2 style="margin-top:1rem">Camera calibration (ChArUco)</h2>
         <p class="hint">
-          Press <kbd>C</kbd> to begin. Place one block (tag ID {params.blockTag}) at each interior
-          corner in order TL → TR → BL → BR, its corner touching the interior corner, then press
-          <kbd>Space</kbd> to record. After 4 corners a per-axis linear fit is computed and can be
-          downloaded as JSON.
+          Print <code>printables/charuco_board.pdf</code> (7×5, DICT_5X5_100). Hold the whole board in
+          view and <strong>Capture view</strong> from several angles/distances (≥5, more is better —
+          tilt it each time). Then <strong>Calibrate camera</strong> runs OpenCV's
+          <code>calibrateCameraExtended</code> and saves the intrinsics. Lower RMS (px) is better.
+          This is required — block positions are computed via solvePnP.
         </p>
       {:else}
-        <h2 style="margin-top:1rem">How to test</h2>
+        <h2 style="margin-top:1rem">Detect</h2>
         <p class="hint">
-          Load a calibration, then move a tagged block (any bordered ID 100–199) around the board.
-          The table shows each tag's raw detected interior position and the position after applying
-          the linear correction — corrected values should track the block's true mm coordinates.
+          Move a tagged block (bordered ID 100–199) around the board. Each row shows its position in
+          board millimetres, computed from <strong>solvePnP</strong> against the ChArUco intrinsics
+          (block height / camera tilt handled natively — no perspective calibration needed).
         </p>
       {/if}
       {#if !cvReady}

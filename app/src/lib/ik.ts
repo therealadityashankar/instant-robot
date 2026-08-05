@@ -21,6 +21,8 @@ export interface IKOptions {
   damping?: number;
   /** Max per-iteration joint-space step norm, radians. */
   stepClamp?: number;
+  /** Per-DOF [lo, hi] overrides (e.g. clamp wrist_flex ≥ 0 to pick a branch). */
+  dofLimits?: Record<number, [number, number]>;
 }
 
 export interface IKResult {
@@ -180,7 +182,106 @@ export class IKSolver {
       const q = this.data.qpos;
       for (let c = 0; c < m; c++) {
         const d = dofIndices[c];
-        const [lo, hi] = this.limits[d];
+        const [lo, hi] = opts.dofLimits?.[d] ?? this.limits[d];
+        q[d] = Math.max(lo, Math.min(hi, q[d] + dq[c] * sc));
+      }
+    }
+    return { ok: false, iters: maxIters, error, qpos: this.readDofs(dofIndices) };
+  }
+
+  /**
+   * Full-pose IK: drive the site to `target` position AND its rotation to `Rd`
+   * (world, row-major 3×3), via damped least squares over a stacked 6×nv
+   * position+orientation Jacobian. On a 5-DOF arm the 6-DOF goal is slightly
+   * over-constrained, so this finds the best-fit pose (small residual). Leaves
+   * the position-only `solve` untouched for the real-arm path.
+   */
+  solvePose(
+    target: [number, number, number],
+    Rd: number[],
+    opts: Omit<IKOptions, 'site'> & { oriWeight?: number },
+  ): IKResult {
+    const { dofIndices } = opts;
+    const maxIters = opts.maxIters ?? 200;
+    const tol = opts.tol ?? 1e-4;
+    const lambda = opts.damping ?? 0.15;
+    const stepClamp = opts.stepClamp ?? 0.2;
+    const kr = opts.oriWeight ?? 0.5;
+    const m = dofIndices.length;
+    const nv = this.nv;
+
+    let error = NaN;
+    for (let it = 0; it < maxIters; it++) {
+      this.mj.mj_forward(this.model, this.data);
+      const sx = this.data.site_xpos as Float64Array;
+      const sm = this.data.site_xmat as Float64Array;
+      const si = this.siteId * 3;
+      const so = this.siteId * 9;
+      const ep = [target[0] - sx[si], target[1] - sx[si + 1], target[2] - sx[si + 2]];
+
+      // Orientation error (world axis-angle) of Re = Rd · Rcᵀ.
+      const Rc = sm.subarray(so, so + 9); // row-major
+      // Re[i][j] = Σk Rd[i][k] * Rc[j][k]  (Rcᵀ)
+      const Re = new Array(9);
+      for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++)
+          Re[i * 3 + j] = Rd[i * 3] * Rc[j * 3] + Rd[i * 3 + 1] * Rc[j * 3 + 1] + Rd[i * 3 + 2] * Rc[j * 3 + 2];
+      const er = [
+        kr * 0.5 * (Re[7] - Re[5]),
+        kr * 0.5 * (Re[2] - Re[6]),
+        kr * 0.5 * (Re[3] - Re[1]),
+      ];
+
+      const errv = [ep[0], ep[1], ep[2], er[0], er[1], er[2]];
+      error = Math.hypot(ep[0], ep[1], ep[2]);
+      const oerr = Math.hypot(er[0], er[1], er[2]);
+      if (error < tol && oerr < tol) {
+        return { ok: true, iters: it, error, qpos: this.readDofs(dofIndices) };
+      }
+
+      this.mj.mj_jacSite(this.model, this.data, this.jacp, this.jacr, this.siteId);
+      const Jp = this.jacp.GetView() as Float64Array; // 3×nv
+      const Jr = this.jacr.GetView() as Float64Array; // 3×nv
+
+      // Reduced stacked Jacobian Js (6 × m).
+      const Js: number[][] = [];
+      for (let r = 0; r < 3; r++) {
+        const row = new Array(m);
+        for (let c = 0; c < m; c++) row[c] = Jp[r * nv + dofIndices[c]];
+        Js.push(row);
+      }
+      for (let r = 0; r < 3; r++) {
+        const row = new Array(m);
+        for (let c = 0; c < m; c++) row[c] = Jr[r * nv + dofIndices[c]];
+        Js.push(row);
+      }
+
+      // A = Js Jsᵀ + λ²I  (6×6); solve A y = err; dq = Jsᵀ y.
+      const A: number[][] = [];
+      for (let i = 0; i < 6; i++) {
+        const row = new Array(6);
+        for (let j = 0; j < 6; j++) {
+          let s = 0;
+          for (let k = 0; k < m; k++) s += Js[i][k] * Js[j][k];
+          row[j] = s + (i === j ? lambda * lambda : 0);
+        }
+        A.push(row);
+      }
+      const y = solveLinear(A, errv);
+      if (!y) return { ok: false, iters: it, error, qpos: this.readDofs(dofIndices) };
+
+      const dq = new Array(m).fill(0);
+      for (let c = 0; c < m; c++) {
+        let s = 0;
+        for (let r = 0; r < 6; r++) s += Js[r][c] * y[r];
+        dq[c] = s;
+      }
+      const dn = Math.hypot(...dq);
+      const sc = dn > stepClamp ? stepClamp / dn : 1;
+      const q = this.data.qpos;
+      for (let c = 0; c < m; c++) {
+        const d = dofIndices[c];
+        const [lo, hi] = opts.dofLimits?.[d] ?? this.limits[d];
         q[d] = Math.max(lo, Math.min(hi, q[d] + dq[c] * sc));
       }
     }
@@ -191,4 +292,22 @@ export class IKSolver {
     const q = this.data.qpos;
     return dofIndices.map((d) => q[d]);
   }
+}
+
+/** Solve A x = b for small n×n via Gaussian elimination with partial pivoting. */
+function solveLinear(A: number[][], b: number[]): number[] | null {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    if (Math.abs(M[piv][col]) < 1e-12) return null;
+    [M[col], M[piv]] = [M[piv], M[col]];
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col] / M[col][col];
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  return M.map((row, i) => row[n] / M[i][i]);
 }

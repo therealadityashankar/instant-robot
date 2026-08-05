@@ -46,7 +46,7 @@ const f = (n: number) => n.toFixed(5);
  * `<worldbody>`. The block is a mocap body so its pose is set kinematically via
  * `data.mocap_pos` — no physics/free joint needed. Returns the modified XML.
  */
-export function buildBoardSceneXml(baseXml: string): string {
+export function buildBoardSceneXml(baseXml: string, opts: { physics?: boolean } = {}): string {
   const tagHalf = TAG_MM / 2 / 1000;
   const boardHalf = SQUARE_MM / 2 / 1000;
   const intHalf = (SQUARE_MM / 2 - INSET_MM) / 1000;
@@ -78,15 +78,28 @@ export function buildBoardSceneXml(baseXml: string): string {
       `contype="0" conaffinity="0" group="1"/>`,
   );
 
-  // Movable block as a mocap body (pose set via data.mocap_pos). Starts hidden
-  // below the floor until a real detection places it.
-  const block =
-    `<body name="block" mocap="true" pos="${f(ROBOT_BASE_TIP_X + 0.15)} 0 -0.1">` +
-    `<geom name="block_geom" type="box" ` +
-    `size="${f(BLOCK_HALF_X)} ${f(BLOCK_HALF_Y)} ${f(BLOCK_HALF_Z)}" ` +
-    `rgba="0.90 0.30 0.20 1" contype="0" conaffinity="0" group="1"/></body>`;
+  // The block. In physics mode it's a real free body (falls, rests, can be
+  // pushed and grasped); otherwise a mocap body whose pose mirrors the detected
+  // real block. Same 75×25×15 mm box either way.
+  const blockPos = `${f(ROBOT_BASE_TIP_X + 0.15)} 0 ${f(BLOCK_HALF_Z)}`;
+  const blockSize = `${f(BLOCK_HALF_X)} ${f(BLOCK_HALF_Y)} ${f(BLOCK_HALF_Z)}`;
+  // Physics block + floor share collision channel 2, isolated from the arm
+  // (channel 1): the block rests on the floor and is held by a weld-attach on
+  // grasp, so it never fights finger contacts or the arm base.
+  const block = opts.physics
+    ? `<body name="block" pos="${blockPos}"><freejoint name="block_free"/>` +
+      `<geom name="block_geom" type="box" size="${blockSize}" mass="0.02" ` +
+      `rgba="0.90 0.30 0.20 1" contype="2" conaffinity="2"/></body>`
+    : `<body name="block" mocap="true" pos="${blockPos}">` +
+      `<geom name="block_geom" type="box" size="${blockSize}" ` +
+      `rgba="0.90 0.30 0.20 1" contype="0" conaffinity="0" group="1"/></body>`;
 
-  const injection = `\n    ${geoms.join('\n    ')}\n    ${block}\n  </worldbody>`;
+  const floor = opts.physics
+    ? `<geom name="floor" type="plane" size="0 0 0.05" pos="0 0 0" contype="2" conaffinity="2" ` +
+      `rgba="0.12 0.13 0.15 1" group="2"/>`
+    : '';
+
+  const injection = `\n    ${geoms.join('\n    ')}\n    ${floor}\n    ${block}\n  </worldbody>`;
   const idx = baseXml.lastIndexOf('</worldbody>');
   if (idx < 0) throw new Error('No </worldbody> in base model XML');
   return baseXml.slice(0, idx) + injection + baseXml.slice(idx + '</worldbody>'.length);

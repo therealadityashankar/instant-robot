@@ -90,6 +90,7 @@ export class MujocoRenderer {
   private model: MjModel;
   private data: MjData;
   private targetMarker: THREE.Mesh;
+  private targetSphere!: THREE.Mesh;
 
   constructor(canvas: HTMLCanvasElement, _mj: Mj, model: MjModel, data: MjData) {
     this.model = model;
@@ -119,12 +120,20 @@ export class MujocoRenderer {
 
     this.buildGeoms();
 
-    // Target marker for the IK goal.
-    this.targetMarker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.008, 16, 12),
-      new THREE.MeshBasicMaterial({ color: 0x22c55e, wireframe: true }),
-    );
+    // Target marker: a cone whose tip is the goal point and whose axis is the
+    // gripper's approach direction, with a square base showing the wrist roll.
+    const mat = new THREE.MeshBasicMaterial({ color: 0x22c55e, wireframe: true });
+    const cone = new THREE.ConeGeometry(0.014, 0.045, 4); // 4 sides → square base
+    // Cone points +Y with tip at +h/2; re-aim to +X with tip at the origin.
+    cone.rotateZ(-Math.PI / 2);
+    cone.translate(-0.0225, 0, 0);
+    this.targetMarker = new THREE.Mesh(cone, mat);
     this.scene.add(this.targetMarker);
+    // Sphere marker, shown instead of the cone when the target has no orientation
+    // (e.g. the "None" grasp — approach direction unspecified).
+    this.targetSphere = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 12), mat);
+    this.targetSphere.visible = false;
+    this.scene.add(this.targetSphere);
 
     this.update();
   }
@@ -159,9 +168,23 @@ export class MujocoRenderer {
     }
   }
 
-  /** Position the IK target marker (world x,y,z). */
-  setTarget(pos: [number, number, number]) {
-    this.targetMarker.position.set(pos[0], pos[1], pos[2]);
+  /**
+   * Position + orient the IK target marker. `rot` is the desired gripper world
+   * rotation (row-major 3×3, columns = local x/y/z axes); its local X is the
+   * approach the cone points along. Omit to keep the marker axis-aligned.
+   */
+  setTarget(pos: [number, number, number], rot?: number[]) {
+    // With an orientation → oriented cone; without → sphere (direction-free).
+    this.targetMarker.visible = !!rot;
+    this.targetSphere.visible = !rot;
+    const marker = rot ? this.targetMarker : this.targetSphere;
+    marker.position.set(pos[0], pos[1], pos[2]);
+    if (rot) {
+      // three.js Matrix4.set takes row-major; basis columns are our local axes.
+      const m = new THREE.Matrix4();
+      m.set(rot[0], rot[1], rot[2], 0, rot[3], rot[4], rot[5], 0, rot[6], rot[7], rot[8], 0, 0, 0, 0, 1);
+      this.targetMarker.quaternion.setFromRotationMatrix(m);
+    }
   }
 
   /** Pull the latest geom transforms from data and render one frame. */

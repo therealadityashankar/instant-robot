@@ -1,0 +1,629 @@
+{
+  "mountFrame": "WaveShare_Mounting_Plate_01d-v1",
+  "baseDrop": 0.15022448,
+  "meshes": [
+    {
+      "name": "base_plate_layer1_v5",
+      "file": "base_plate_layer1-v5.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "drive_motor_mount_v11_2",
+      "file": "drive_motor_mount-v11-2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "ST3215_Servo_Motor_v1_2",
+      "file": "ST3215_Servo_Motor-v1-2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_4_Omni_Directional_Wheel_Single_Body_v1_2",
+      "file": "4-Omni-Directional-Wheel_Single_Body-v1-2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "omni_wheel_mount_v5_2",
+      "file": "omni_wheel_mount-v5-2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "drive_motor_mount_v11_1",
+      "file": "drive_motor_mount-v11-1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "ST3215_Servo_Motor_v1_1",
+      "file": "ST3215_Servo_Motor-v1-1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "omni_wheel_mount_v5_1",
+      "file": "omni_wheel_mount-v5-1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_4_Omni_Directional_Wheel_Single_Body_v1_1",
+      "file": "4-Omni-Directional-Wheel_Single_Body-v1-1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "drive_motor_mount_v11",
+      "file": "drive_motor_mount-v11.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "ST3215_Servo_Motor_v1",
+      "file": "ST3215_Servo_Motor-v1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "omni_wheel_mount_v5",
+      "file": "omni_wheel_mount-v5.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_4_Omni_Directional_Wheel_Single_Body_v1",
+      "file": "4-Omni-Directional-Wheel_Single_Body-v1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "servo_controller_mount_v3",
+      "file": "servo_controller_mount-v3.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "lipo_battery_mount_v3",
+      "file": "lipo_battery_mount-v3.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "Battery___Battery_5_2_Ah_DC5521_Plug_v2",
+      "file": "Battery---Battery-5.2-Ah-DC5521-Plug-v2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff",
+      "file": "94868A713_NO-THREADS_Female-Threaded-Hex-Standoff.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "base_plate_layer2_v3",
+      "file": "base_plate_layer2-v3.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "Bottom_V2_v3",
+      "file": "Bottom-V2-v3.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "Top_V2_v2",
+      "file": "Top-V2-v2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "Camera_Mount_v8",
+      "file": "Camera-Mount-v8.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "Camera_Model_v3",
+      "file": "Camera-Model-v3.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_1",
+      "file": "94868A713_NO-THREADS_Female-Threaded-Hex-Standoff-1.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_2",
+      "file": "94868A713_NO-THREADS_Female-Threaded-Hex-Standoff-2.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_3",
+      "file": "94868A713_NO-THREADS_Female-Threaded-Hex-Standoff-3.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_4",
+      "file": "94868A713_NO-THREADS_Female-Threaded-Hex-Standoff-4.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    {
+      "name": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_5",
+      "file": "94868A713_NO-THREADS_Female-Threaded-Hex-Standoff-5.stl",
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    }
+  ],
+  "geoms": [
+    {
+      "mesh": "base_plate_layer1_v5",
+      "pos": [
+        -0.0033573501,
+        -0.0033573501,
+        0.1173
+      ],
+      "quat": [
+        7.0297806e-17,
+        -0.38268343,
+        -0.92387953,
+        5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "drive_motor_mount_v11_2",
+      "pos": [
+        -0.059925893,
+        -0.088210164,
+        0.1138
+      ],
+      "quat": [
+        5.6571306e-17,
+        0.38268343,
+        -0.92387953,
+        -8.9710009e-17
+      ]
+    },
+    {
+      "mesh": "ST3215_Servo_Motor_v1_2",
+      "pos": [
+        -0.063256366,
+        -0.098456141,
+        0.09944
+      ],
+      "quat": [
+        8.0003908e-17,
+        -0.92387953,
+        0.38268343,
+        8.0003908e-17
+      ]
+    },
+    {
+      "mesh": "m_4_Omni_Directional_Wheel_Single_Body_v1_2",
+      "pos": [
+        -0.10437462,
+        -0.10351195,
+        0.09944
+      ],
+      "quat": [
+        0.35355339,
+        0.1830127,
+        0.6830127,
+        0.61237244
+      ]
+    },
+    {
+      "mesh": "omni_wheel_mount_v5_2",
+      "pos": [
+        -0.092026773,
+        -0.091164102,
+        0.09944
+      ],
+      "quat": [
+        0.27059805,
+        -0.27059805,
+        -0.65328148,
+        0.65328148
+      ]
+    },
+    {
+      "mesh": "drive_motor_mount_v11_1",
+      "pos": [
+        -0.04338139,
+        0.068740335,
+        0.1138
+      ],
+      "quat": [
+        5.3260735e-17,
+        -0.60876143,
+        -0.79335334,
+        7.2838096e-17
+      ]
+    },
+    {
+      "mesh": "ST3215_Servo_Motor_v1_1",
+      "pos": [
+        -0.050796486,
+        0.077520339,
+        0.09944
+      ],
+      "quat": [
+        1.2412359e-16,
+        0.13052619,
+        -0.99144486,
+        3.9907371e-16
+      ]
+    },
+    {
+      "mesh": "omni_wheel_mount_v5_1",
+      "pos": [
+        -0.030096191,
+        0.098790223,
+        0.09944
+      ],
+      "quat": [
+        0.56098553,
+        -0.43045933,
+        -0.56098553,
+        -0.43045933
+      ]
+    },
+    {
+      "mesh": "m_4_Omni_Directional_Wheel_Single_Body_v1_1",
+      "pos": [
+        -0.034615819,
+        0.1156577,
+        0.09944
+      ],
+      "quat": [
+        0.43045933,
+        0.56098553,
+        -0.43045933,
+        0.56098553
+      ]
+    },
+    {
+      "mesh": "drive_motor_mount_v11",
+      "pos": [
+        0.079093097,
+        -0.0047443572,
+        0.1138
+      ],
+      "quat": [
+        6.6089563e-17,
+        -0.99144486,
+        0.13052619,
+        -1.3984313e-17
+      ]
+    },
+    {
+      "mesh": "ST3215_Servo_Motor_v1",
+      "pos": [
+        0.08963161,
+        -0.0025056427,
+        0.09944
+      ],
+      "quat": [
+        1.7420892e-16,
+        -0.79335334,
+        -0.60876143,
+        -2.2348626e-16
+      ]
+    },
+    {
+      "mesh": "omni_wheel_mount_v5",
+      "pos": [
+        0.097701723,
+        -0.031067566,
+        0.09944
+      ],
+      "quat": [
+        0.092295956,
+        0.70105738,
+        -0.092295956,
+        0.70105738
+      ]
+    },
+    {
+      "mesh": "m_4_Omni_Directional_Wheel_Single_Body_v1",
+      "pos": [
+        0.1145692,
+        -0.035587193,
+        0.09944
+      ],
+      "quat": [
+        0.6830127,
+        1.6254793e-16,
+        -0.70710678,
+        -0.1830127
+      ]
+    },
+    {
+      "mesh": "servo_controller_mount_v3",
+      "pos": [
+        0.039069057,
+        0.039069057,
+        0.1113
+      ],
+      "quat": [
+        9.7061016e-18,
+        -0.92387953,
+        -0.38268343,
+        8.9710009e-17
+      ]
+    },
+    {
+      "mesh": "lipo_battery_mount_v3",
+      "pos": [
+        0.017855853,
+        -0.052854825,
+        0.1138
+      ],
+      "quat": [
+        2.3432602e-17,
+        0.92387953,
+        0.38268343,
+        -9.7061016e-18
+      ]
+    },
+    {
+      "mesh": "Battery___Battery_5_2_Ah_DC5521_Plug_v2",
+      "pos": [
+        0.043665251,
+        -0.078664222,
+        0.1108
+      ],
+      "quat": [
+        0.65328148,
+        0.27059805,
+        0.65328148,
+        -0.27059805
+      ]
+    },
+    {
+      "mesh": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff",
+      "pos": [
+        -0.0033573501,
+        -0.0033573501,
+        0.0923
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "base_plate_layer2_v3",
+      "pos": [
+        -0.0033573501,
+        -0.0033573501,
+        0.0603
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "Bottom_V2_v3",
+      "pos": [
+        -0.048612184,
+        -0.048612184,
+        0.0603
+      ],
+      "quat": [
+        6.9570553e-17,
+        -0.92387953,
+        0.38268343,
+        -7.4473366e-19
+      ]
+    },
+    {
+      "mesh": "Top_V2_v2",
+      "pos": [
+        -0.048612344,
+        -0.048612024,
+        0.031300429
+      ],
+      "quat": [
+        0.92387953,
+        1.1314261e-16,
+        3.3353785e-33,
+        -0.38268343
+      ]
+    },
+    {
+      "mesh": "Camera_Mount_v8",
+      "pos": [
+        0.067353328,
+        0.067353328,
+        0.1173
+      ],
+      "quat": [
+        9.7061016e-18,
+        -0.92387953,
+        -0.38268343,
+        8.9710009e-17
+      ]
+    },
+    {
+      "mesh": "Camera_Model_v3",
+      "pos": [
+        0.073574263,
+        0.073574263,
+        0.092767832
+      ],
+      "quat": [
+        0.24598417,
+        0.29315252,
+        0.70773278,
+        0.59385832
+      ]
+    },
+    {
+      "mesh": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_1",
+      "pos": [
+        0.053211192,
+        -0.088210164,
+        0.0923
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_2",
+      "pos": [
+        -0.088210164,
+        0.053211192,
+        0.09248403
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_3",
+      "pos": [
+        0.088058852,
+        -0.048557771,
+        0.0923
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_4",
+      "pos": [
+        -0.0099207381,
+        0.098411613,
+        0.0923
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    },
+    {
+      "mesh": "m_94868A713_NO_THREADS_Female_Threaded_Hex_Standoff_5",
+      "pos": [
+        -0.088210164,
+        -0.059925893,
+        0.0923
+      ],
+      "quat": [
+        2.3432602e-17,
+        -0.38268343,
+        -0.92387953,
+        -5.6571306e-17
+      ]
+    }
+  ]
+}

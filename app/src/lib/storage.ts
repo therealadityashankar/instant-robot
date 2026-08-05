@@ -3,16 +3,15 @@
 // stored one. All access is guarded — storage may be unavailable/full.
 
 import type { JointCalibration } from './joints';
+import type { Intrinsics } from './charuco';
+import type { RobotId } from './robots';
+import type { BaseConfig } from './lekiwiBase';
 
-const BOARD_KEY = 'instant-robot:board-calibration';
 const JOINT_KEY = 'instant-robot:joint-calibration';
-
-export interface BoardCorrection {
-  Sx: number;
-  Bx: number;
-  Sy: number;
-  By: number;
-}
+const INTRINSICS_KEY = 'instant-robot:camera-intrinsics';
+const ROBOT_KEY = 'instant-robot:selected-robot';
+const ARM_OFFSET_KEY = 'instant-robot:arm-offset'; // { [robotId]: [x,y,z] }
+const BASE_CFG_KEY = 'instant-robot:base-config'; // LeKiwi wheel-drive config
 
 function read<T>(key: string): T | null {
   try {
@@ -31,21 +30,51 @@ function write(key: string, value: unknown) {
   }
 }
 
-export function saveBoardCalibration(c: BoardCorrection) {
-  write(BOARD_KEY, { Sx: c.Sx, Bx: c.Bx, Sy: c.Sy, By: c.By });
-}
-
-export function loadBoardCalibration(): BoardCorrection | null {
-  const d = read<BoardCorrection>(BOARD_KEY);
-  if (d && ['Sx', 'Bx', 'Sy', 'By'].every((k) => typeof (d as any)[k] === 'number')) return d;
-  return null;
-}
-
 export function saveJointCalibration(c: Record<string, JointCalibration>) {
   write(JOINT_KEY, c);
 }
 
 export function loadJointCalibration(): Record<string, JointCalibration> | null {
   const d = read<Record<string, JointCalibration>>(JOINT_KEY);
+  return d && typeof d === 'object' ? d : null;
+}
+
+export function saveIntrinsics(c: Intrinsics) {
+  write(INTRINSICS_KEY, c);
+}
+
+export function loadIntrinsics(): Intrinsics | null {
+  const d = read<Intrinsics>(INTRINSICS_KEY);
+  if (d && Array.isArray(d.cameraMatrix) && d.cameraMatrix.length === 9) return d;
+  return null;
+}
+
+export function saveRobotId(id: RobotId) {
+  write(ROBOT_KEY, id);
+}
+
+export function loadRobotId(): RobotId | null {
+  const d = read<RobotId>(ROBOT_KEY);
+  return d === 'so101' || d === 'lekiwi' ? d : null;
+}
+
+export function saveArmOffset(id: RobotId, offset: [number, number, number]) {
+  const all = read<Record<string, [number, number, number]>>(ARM_OFFSET_KEY) ?? {};
+  all[id] = offset;
+  write(ARM_OFFSET_KEY, all);
+}
+
+export function loadArmOffset(id: RobotId): [number, number, number] | null {
+  const all = read<Record<string, [number, number, number]>>(ARM_OFFSET_KEY);
+  const v = all?.[id];
+  return Array.isArray(v) && v.length === 3 ? v : null;
+}
+
+export function saveBaseConfig(c: BaseConfig) {
+  write(BASE_CFG_KEY, c);
+}
+
+export function loadBaseConfig(): Partial<BaseConfig> | null {
+  const d = read<Partial<BaseConfig>>(BASE_CFG_KEY);
   return d && typeof d === 'object' ? d : null;
 }
