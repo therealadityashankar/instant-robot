@@ -157,3 +157,12 @@ export function simRadToServo(simRad: number, fit: JointFit): number | null {
   const real = (simRad - fit.offset) / fit.scale;
   return Math.min(SERVO_MAX, Math.max(SERVO_MIN, Math.round(real)));
 }
+
+/**
+ * Convert a raw servo reading back to a sim angle (rad): sim = scale·real + offset.
+ * Inverse of simRadToServo — used to seed the simulator from the live arm on connect.
+ */
+export function servoToSimRad(real: number, fit: JointFit): number | null {
+  if (fit.scale == null || fit.offset == null) return null;
+  return fit.scale * real + fit.offset;
+}

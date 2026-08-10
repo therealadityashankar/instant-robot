@@ -338,12 +338,22 @@ def main():
                         help="Gap between tag rows and between tags (default: 2)")
     parser.add_argument("--out",       type=str,   default="printables/aruco_board.pdf")
     parser.add_argument("--dpi",       type=int,   default=300)
+    parser.add_argument("--match-app", action="store_true",
+                        help="Auto-scale tag/gap from --square-mm so the layout matches the "
+                             "app board (10 outer / 8 inner, same IDs) at any size. Great for "
+                             "small in-shelf boards. The app must be told each board's size.")
     args = parser.parse_args()
+
+    tag_mm, gap_mm = args.tag_mm, args.gap_mm
+    if args.match_app:
+        # Reference board is 180 mm square, 16 mm tag, 2 mm gap → 10 outer / 8 inner.
+        tag_mm = args.square_mm * 16.0 / 180.0
+        gap_mm = args.square_mm * 2.0 / 180.0
 
     img, placed = draw_board(
         square_mm=args.square_mm,
-        tag_mm=args.tag_mm,
-        gap_mm=args.gap_mm,
+        tag_mm=tag_mm,
+        gap_mm=gap_mm,
         dpi=args.dpi,
     )
 

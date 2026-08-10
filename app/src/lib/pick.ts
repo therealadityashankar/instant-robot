@@ -4,7 +4,9 @@
 // target and gripper command; the Simulator drives IK toward that target each
 // frame and streams the joints to the real arm.
 
-export type PickPhase = 'idle' | 'approach' | 'descend' | 'grasp' | 'lift' | 'done';
+// 'open' holds the arm still and opens the gripper to its widest — always the
+// first step of a pick, so the fingers are clear before anything moves.
+export type PickPhase = 'idle' | 'open' | 'approach' | 'descend' | 'grasp' | 'lift' | 'done';
 
 export interface PickParams {
   hoverZ: number; // m above board to hover before descending
@@ -51,16 +53,22 @@ export function phaseTarget(
   block: [number, number, number],
   phase: PickPhase,
   params: PickParams = DEFAULT_PICK,
+  /** Optional descend height (m above the board), overriding graspZ — used to
+   *  lower in small increments rather than in one drop. */
+  descendZ?: number,
 ): { target: [number, number, number]; gripper: number } {
   const [bx, by] = block;
   const p = params;
   const gx = bx + p.graspXOffset; // grasp x/y for descend/grasp/lift
   const gy = by + p.graspYOffset;
   switch (phase) {
+    case 'open':
+      // Hold the hover pose, fingers wide — nothing moves but the gripper.
+      return { target: [bx, by, p.hoverZ + p.ikZOffset], gripper: p.gripperOpen };
     case 'approach':
       return { target: [bx, by, p.hoverZ + p.ikZOffset], gripper: p.gripperOpen };
     case 'descend':
-      return { target: [gx, gy, p.graspZ + p.ikZOffset], gripper: p.gripperOpen };
+      return { target: [gx, gy, (descendZ ?? p.graspZ) + p.ikZOffset], gripper: p.gripperOpen };
     case 'grasp':
       return { target: [gx, gy, p.graspZ + p.ikZOffset], gripper: p.gripperClose };
     case 'lift':

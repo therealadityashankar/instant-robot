@@ -23,6 +23,16 @@ export interface IKOptions {
   stepClamp?: number;
   /** Per-DOF [lo, hi] overrides (e.g. clamp wrist_flex ≥ 0 to pick a branch). */
   dofLimits?: Record<number, [number, number]>;
+  /**
+   * Per-axis [x, y, z] importance of the position target, default [1,1,1].
+   *
+   * A zero *removes* that axis from the problem rather than pinning it: both the
+   * error component and the corresponding Jacobian row are dropped, so the axis
+   * is free to go wherever the other constraints take it. (Zeroing the error
+   * alone would do the opposite — least-squares would then drive that axis's
+   * motion to zero, i.e. lock it.) Use [1,1,0] for "reach this x-y, height free".
+   */
+  axisWeight?: [number, number, number];
 }
 
 export interface IKResult {
@@ -114,6 +124,14 @@ export class IKSolver {
     return [sx[i], sx[i + 1], sx[i + 2]];
   }
 
+  /** Current world rotation of the driven site (row-major 3×3; columns are the
+   *  site's local x/y/z axes expressed in world). Read from `site_xmat`. */
+  siteRotation(): number[] {
+    const sm = this.data.site_xmat as Float64Array;
+    const i = this.siteId * 9;
+    return Array.from(sm.subarray(i, i + 9));
+  }
+
   /**
    * Solve so the driven site reaches `target` (world x,y,z). Mutates the DOFs in
    * `opts.dofIndices` on the live data; other DOFs are held fixed.
@@ -132,7 +150,12 @@ export class IKSolver {
       this.mj.mj_forward(this.model, this.data);
       const sx = this.data.site_xpos as Float64Array;
       const si = this.siteId * 3;
-      const err = [target[0] - sx[si], target[1] - sx[si + 1], target[2] - sx[si + 2]];
+      const w = opts.axisWeight ?? [1, 1, 1];
+      const err = [
+        w[0] * (target[0] - sx[si]),
+        w[1] * (target[1] - sx[si + 1]),
+        w[2] * (target[2] - sx[si + 2]),
+      ];
       error = Math.hypot(err[0], err[1], err[2]);
       if (error < tol) {
         return { ok: true, iters: it, error, qpos: this.readDofs(dofIndices) };
@@ -141,10 +164,13 @@ export class IKSolver {
       this.mj.mj_jacSite(this.model, this.data, this.jacp, this.jacr, this.siteId);
       const J = this.jacp.GetView() as Float64Array; // 3 × nv, row-major
 
-      // Reduced Jacobian Jr (3 × m) over the controlled DOFs.
+      // Reduced Jacobian Jr (3 × m) over the controlled DOFs. Rows are scaled by
+      // the same axis weights as the error, so a zero weight drops the axis from
+      // the system entirely (its row of A becomes λ² on the diagonal alone) and
+      // leaves it genuinely free rather than pinned.
       const Jr = [new Array(m), new Array(m), new Array(m)];
       for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < m; c++) Jr[r][c] = J[r * nv + dofIndices[c]];
+        for (let c = 0; c < m; c++) Jr[r][c] = w[r] * J[r * nv + dofIndices[c]];
       }
 
       // A = Jr Jrᵀ + λ²I  (3×3)

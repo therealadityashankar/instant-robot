@@ -12,6 +12,7 @@ const INTRINSICS_KEY = 'instant-robot:camera-intrinsics';
 const ROBOT_KEY = 'instant-robot:selected-robot';
 const ARM_OFFSET_KEY = 'instant-robot:arm-offset'; // { [robotId]: [x,y,z] }
 const BASE_CFG_KEY = 'instant-robot:base-config'; // LeKiwi wheel-drive config
+const ARM_POSE_KEY = 'instant-robot:last-arm-pose'; // joints + EE target, for reload
 
 function read<T>(key: string): T | null {
   try {
@@ -77,4 +78,21 @@ export function saveBaseConfig(c: BaseConfig) {
 export function loadBaseConfig(): Partial<BaseConfig> | null {
   const d = read<Partial<BaseConfig>>(BASE_CFG_KEY);
   return d && typeof d === 'object' ? d : null;
+}
+
+/** The arm's last pose: joint angles (rad) and the end-effector target it held. */
+export interface ArmPose {
+  joints: number[];
+  target: [number, number, number];
+  gripper: number;
+}
+
+export function saveArmPose(p: ArmPose) {
+  write(ARM_POSE_KEY, p);
+}
+
+export function loadArmPose(): ArmPose | null {
+  const d = read<ArmPose>(ARM_POSE_KEY);
+  if (d && Array.isArray(d.joints) && d.joints.length >= 5 && Array.isArray(d.target)) return d;
+  return null;
 }

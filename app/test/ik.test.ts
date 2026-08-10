@@ -74,3 +74,31 @@ test('IK reports failure for an unreachable target', async () => {
 
   solver.dispose();
 });
+
+test('axisWeight [1,1,0] tracks x-y and leaves z genuinely free', async () => {
+  const mj = await loadMujocoModule();
+  const { model, data } = mountModel(mj, loadFiles(), XML);
+  const solver = new IKSolver(mj, model, data, GRASP_SITE);
+  const REACH_DOFS = [1, 2, 3]; // shoulder_lift, elbow_flex, wrist_flex
+
+  for (let i = 0; i < 6; i++) data.qpos[i] = 0;
+  data.qpos[1] = 0.5;
+  data.qpos[2] = 0.5;
+  mj.mj_forward(model, data);
+  const start = solver.sitePosition();
+
+  // Ask for a horizontal shift with an absurd z target: if z were being tracked
+  // (or pinned) the solve would be dragged badly off the x-y goal.
+  const goal: [number, number, number] = [start[0] + 0.03, start[1], start[2] + 99];
+  solver.solve(goal, { dofIndices: REACH_DOFS, maxIters: 40, axisWeight: [1, 1, 0] });
+  const end = solver.sitePosition();
+
+  const xyErr = Math.hypot(end[0] - goal[0], end[1] - goal[1]);
+  assert.ok(xyErr < 5e-3, `x-y should still be reached, off by ${xyErr * 1000}mm`);
+
+  // And z must be free to move — not pinned to where it started.
+  const moved = Math.abs(end[2] - start[2]);
+  assert.ok(moved > 1e-6, 'z was pinned; the axis is not actually free');
+
+  solver.dispose();
+});

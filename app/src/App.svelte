@@ -30,6 +30,10 @@
   } from './lib/charuco';
   import JointCalibration from './JointCalibration.svelte';
   import Simulator from './Simulator.svelte';
+  import { armLink } from './lib/armLink.svelte';
+  import { settings } from './lib/settings.svelte';
+  import SettingsModal from './SettingsModal.svelte';
+  import BaseCalibration from './BaseCalibration.svelte';
 
   let params = $state<BoardParams>({ ...DEFAULT_PARAMS });
 
@@ -41,7 +45,7 @@
 
   // ── Calibration modal: camera intrinsics / detect / joint calibration ─────
   let calibrateOpen = $state(false);
-  let calStep = $state<'intrinsics' | 'test' | 'joints'>('intrinsics');
+  let calStep = $state<'intrinsics' | 'test' | 'joints' | 'base'>('intrinsics');
 
   // ── Camera intrinsics (ChArUco) ───────────────────────────────────────────
   let intrinsics = $state<Intrinsics | null>(loadIntrinsics());
@@ -449,27 +453,68 @@
       <h1>Instant Robot</h1>
       <p class="subtitle">SO-101 inverse-kinematics simulator &amp; calibration</p>
     </div>
-    <button class="primary big botbtn" onclick={() => (calibrateOpen = true)}>
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
+    <div class="topactions">
+      <button
+        class="big botbtn"
+        class:primary={!armLink.connected}
+        disabled={armLink.busy || !armLink.connect}
+        onclick={() => armLink.toggle()}
+        title={armLink.error ?? 'Connect to the Feetech servo bus over WebSerial'}
       >
-        <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" />
-        <path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
-      </svg>
-      Connect and calibrate!
-    </button>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" />
+          <path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
+        </svg>
+        {armLink.busy ? 'Connecting…' : armLink.connected ? 'Disconnect motors' : 'Connect motors'}
+      </button>
+      <button class="primary big botbtn" onclick={() => (calibrateOpen = true)}>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 20a8 8 0 1 0-8-8" /><path d="M12 8v4l3 2" /><path d="m4 12-2 2" />
+          <path d="m4 12 2 2" />
+        </svg>
+        Calibrate
+      </button>
+      <button class="big botbtn" onclick={() => (settings.open = true)} title="app-wide preferences">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+        Settings
+      </button>
+    </div>
   </header>
+  {#if armLink.error}
+    <div class="toperror">Servo bus: {armLink.error}</div>
+  {/if}
 
   <!-- Hidden source element; frames are read from it into OpenCV each tick. -->
   <video bind:this={video} playsinline muted style="display:none"></video>
 
   <Simulator />
 </div>
+
+<SettingsModal />
 
 {#if calibrateOpen}
   <div
@@ -491,6 +536,9 @@
           <button class:active={calStep === 'joints'} onclick={() => (calStep = 'joints')}>
             3 · Joints
           </button>
+          <button class:active={calStep === 'base'} onclick={() => (calStep = 'base')}>
+            4 · Base
+          </button>
         </div>
         <button class="close" onclick={() => (calibrateOpen = false)}>✕</button>
       </div>
@@ -498,6 +546,8 @@
       <div class="modal-body">
         {#if calStep === 'joints'}
           <JointCalibration />
+        {:else if calStep === 'base'}
+          <BaseCalibration />
         {:else}
           <div class="layout">
     <div>

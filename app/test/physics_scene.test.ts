@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { loadMujocoModule, mountModel, type ModelFiles } from '../src/lib/mujocoSession';
-import { buildBoardSceneXml, BLOCK_HALF_Z } from '../src/lib/boardSim';
+import { buildBoardSceneXml, BLOCK_HALF_Z, STATION_H } from '../src/lib/boardSim';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SO101 = join(here, '..', 'public', 'models', 'so101');
@@ -34,6 +34,8 @@ test('physics block falls and rests stably', async () => {
   const q = data.qpos as Float64Array;
   const z = q[qadr + 2];
   assert.ok(Number.isFinite(z), 'block z is finite (sim did not explode)');
-  // Rests with its bottom on the floor: centre ≈ half height.
-  assert.ok(Math.abs(z - BLOCK_HALF_Z) < 0.01, `block rests near ${BLOCK_HALF_Z}, got ${z}`);
+  // The object now starts on the station, so it should settle on the pedestal's
+  // top face rather than falling through it to the floor.
+  const expect = STATION_H + BLOCK_HALF_Z;
+  assert.ok(Math.abs(z - expect) < 0.01, `block rests near ${expect}, got ${z}`);
 });

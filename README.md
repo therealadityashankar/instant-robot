@@ -71,3 +71,45 @@ uv run python run_real_ik.py --port /dev/tty.usbmodem5A680089441
 ```
 
 Video is saved to `real_ik_run.mp4`.
+
+## Simulated scene: stations and props
+
+The sim places five pedestals around the robot's start point, each with a nav
+fiducial on the side turned back toward the origin, so one opening sweep finds
+all of them. Each carries something different:
+
+| Nav tag | Prop | Object tag | Pick status |
+|---|---|---|---|
+| 200 | jenga block | 101 | the pick under development |
+| 201 | apple | 102 | tag lies flat — same geometry as the block |
+| 202 | banana | 103 | tag lies flat — same geometry as the block |
+| 203 | water bottle | 104 | **to do** — see below |
+| 204 | potted plant | — | the thing to be watered |
+
+Props are built from MuJoCo primitives rather than imported meshes. What a pick
+needs from an object is somewhere to put the jaws and a tag to aim at, and a
+primitive gives exact collision geometry for a few bytes where a mesh gives
+approximate collision for megabytes.
+
+### To do: picking up the water bottle
+
+Every grasp so far comes down onto a tag lying **flat**, with the approach axis
+along the tag's normal — straight down. The bottle is an upright cylinder with
+its marker on the **curved side**, so its tag normal is horizontal: the approach
+has to come in sideways, and the jaws close around a round cross-section rather
+than a flat-sided one. That needs:
+
+- an approach axis taken from the tag's measured normal instead of forced
+  vertical (`topDownGrasp` currently pins it to straight down, which is right for
+  everything else in the scene and wrong for this);
+- a grasp width and roll suited to a cylinder, where there is no long axis to
+  line the jaws up with — any diameter will do, so the roll constraint that lines
+  the jaws up with a tag edge stops being meaningful;
+- somewhere to put it down again, since the point of the bottle is watering the
+  plant at station 204.
+
+### To do: apple and banana as movable objects
+
+Both are static geoms on their pedestals at the moment, so they can be found and
+approached but not lifted. Making them free bodies with a `freejoint`, the way
+the block already is, is what turns them into pick targets.
