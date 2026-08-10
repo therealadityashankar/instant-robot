@@ -16,8 +16,6 @@
     loadIntrinsics,
     saveRobotId,
     loadRobotId,
-    saveArmOffset,
-    loadArmOffset,
   } from './lib/storage';
   import { wheelSpeeds, bodyToPrimitives, PRIMITIVE_DIRS } from './lib/lekiwiBase';
   import {
@@ -416,11 +414,17 @@
   let mj: Awaited<ReturnType<typeof loadMujocoModule>> | null = null;
 
   // ── robot selection + mobile-base placement ─────────────────────────────────
-  let selectedRobot = $state<RobotId>(loadRobotId() ?? 'so101');
+  // LeKiwi by default: the stations are spread around the room, so exploring and
+  // driving to them is the whole job — the fixed arm can only ever reach whatever
+  // happens to be within arm's length of it. A stored choice still wins.
+  let selectedRobot = $state<RobotId>(loadRobotId() ?? 'lekiwi');
   // Base position relative to the arm mount (m). Tuned live via the base mocap
   // body, so no remount is needed while dialing it in.
-  const initOffset =
-    loadArmOffset(selectedRobot) ?? robotById(selectedRobot).base?.defaultOffset ?? [0, 0, 0];
+  // Fixed by the robot's definition, not adjustable and not stored. It was a live
+  // control saved to localStorage, which is a poor fit for a measurement of how
+  // the hardware is bolted together: the value was right in one browser and
+  // absent everywhere else, and nothing said so.
+  const initOffset = robotById(selectedRobot).base?.defaultOffset ?? [0, 0, 0];
   // Whole-robot world pose (LeKiwi drives/turns around the sim).
   let robotX = $state(0);
   let robotY = $state(0);
@@ -868,6 +872,14 @@
   // gripper is not: the sim would have the jaws visibly around the block and still
   // let it sit there while the arm lifted away.
   let grabbedRel: { p: number[]; R: number[] } | null = null;
+  /**
+   * Whether anything is currently in the jaws, for the markup to read.
+   *
+   * Separate from grabbedRel because that is rewritten on every physics step and
+   * is deliberately not reactive — assigning $state at frame rate would re-run
+   * every effect that touches it. This flips only when the hold starts or ends.
+   */
+  let holdingItem = $state(false);
 
   /** The gripper's frame right now: rotation (row-major) and origin. */
   function graspFrame(): { R: number[]; t: number[] } | null {
@@ -910,6 +922,7 @@
     const blockQadr = adr.q, blockDadr = adr.d;
     const closing = gripperCmd > (gripperRange[0] + gripperRange[1]) / 2;
     if (!closing) {
+      if (grabbedRel) holdingItem = false;
       grabbedRel = null;
       return;
     }
@@ -918,6 +931,7 @@
     const q = session.data.qpos as Float64Array;
     if (!grabbedRel) {
       if (!fingersOnBlock(blockTag)) return;
+      holdingItem = true;
       // Remember where the block sits in the gripper's frame, and hold that.
       const d = [q[blockQadr] - g.t[0], q[blockQadr + 1] - g.t[1], q[blockQadr + 2] - g.t[2]];
       const Rt = [g.R[0], g.R[3], g.R[6], g.R[1], g.R[4], g.R[7], g.R[2], g.R[5], g.R[8]];
@@ -1218,7 +1232,7 @@
     if (id === selectedRobot && session) return;
     selectedRobot = id;
     saveRobotId(id);
-    const off = loadArmOffset(id) ?? robotById(id).base?.defaultOffset ?? [0, 0, 0];
+    const off = robotById(id).base?.defaultOffset ?? [0, 0, 0];
     baseOffX = off[0];
     baseOffY = off[1];
     baseOffZ = off[2];
@@ -1234,13 +1248,9 @@
 
   // Tune the arm-on-base placement + drive the robot around live (no remount).
   $effect(() => {
-    const x = baseOffX, y = baseOffY, z = baseOffZ;
     const rx = robotX, ry = robotY, rψ = robotYawDeg, ayaw = armYawDeg;
     void rx; void ry; void rψ; void ayaw; // tracked so the robot re-places on change
-    if (hasBase && session) {
-      placeRobot();
-      saveArmOffset(selectedRobot, [x, y, z]);
-    }
+    if (hasBase && session) placeRobot();
   });
 
   // Each canvas lives in its own grid cell now, so measure the cells rather than
@@ -3368,16 +3378,6 @@
     }
   }
 
-  // Mirror the arm-on-base offset into Settings, and accept edits back from it.
-  $effect(() => {
-    settings.armOffset = hasBase ? [baseOffX, baseOffY, baseOffZ] : null;
-  });
-  settings.setArmOffset = (axis, value) => {
-    if (axis === 0) baseOffX = value;
-    else if (axis === 1) baseOffY = value;
-    else baseOffZ = value;
-  };
-
   // Let the header's Connect button drive the same logic, and mirror the state
   // back so it can show connected / error without owning any of it.
   armLink.connect = connectRobot;
@@ -4233,21 +4233,9 @@
             </button>
           </div>
           {#if atTag === t.id}
-            <div class="controls">
-              <button disabled={!hasBase || nudging} onclick={() => nudgeForward()}>
-                {nudging ? 'Moving…' : 'Forward a bit'}
-              </button>
-              {#if lookingForItems}
-                <button onclick={() => (lookCancel = true)}>Stop looking</button>
-              {/if}
-              <button disabled={!armCamReady || armPickBusy} onclick={() => lookForItems()}>
-                {armPickBusy ? 'Looking…' : 'Look for items'}
-              </button>
-              <button disabled={armPickBusy || deliverBusy} onclick={putInBasket}>
-                {deliverBusy ? 'Delivering…' : 'Put in basket'}
-              </button>
-              <button disabled={armPickBusy} onclick={() => openGripper()}>Open gripper</button>
-            </div>
+            <!-- What to pick comes first: once something is in view that is the
+                 action, and burying it under the controls that found it reads
+                 like the search is still the point. -->
             {#if armDetectedTags.length}
               <div class="controls">
                 {#each armDetectedTags as id (id)}
@@ -4257,6 +4245,22 @@
                 {/each}
               </div>
             {/if}
+            <div class="controls">
+              {#if lookingForItems}
+                <button onclick={() => (lookCancel = true)}>Stop looking</button>
+              {/if}
+              <button disabled={!armCamReady || armPickBusy} onclick={() => lookForItems()}>
+                {armPickBusy ? 'Looking…' : 'Look for items'}
+              </button>
+              <!-- Only once something is actually held: there is nothing to put
+                   down or let go of otherwise, and offering it says there is. -->
+              {#if holdingItem}
+                <button disabled={armPickBusy || deliverBusy} onclick={putInBasket}>
+                  {deliverBusy ? 'Delivering…' : 'Put in basket'}
+                </button>
+                <button disabled={armPickBusy} onclick={() => openGripper()}>Open gripper</button>
+              {/if}
+            </div>
           {/if}
         </div>
       {/each}

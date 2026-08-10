@@ -23,7 +23,11 @@ export const ROBOTS: RobotDef[] = [
   {
     id: 'lekiwi',
     label: 'LeKiwi (mobile base)',
-    base: { dir: 'lekiwi', manifest: 'base.json', defaultOffset: [0, 0, 0] },
+    // z = −0.06: the arm mounts that far below the base's own origin, measured on
+    // the real robot. It used to be [0, 0, 0] here and corrected by hand in the
+    // browser, which meant the height was right on exactly one machine and wrong
+    // everywhere else — including a fresh clone.
+    base: { dir: 'lekiwi', manifest: 'base.json', defaultOffset: [0, 0, -0.06] },
   },
 ];
 

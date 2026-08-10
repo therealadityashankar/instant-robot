@@ -42,28 +42,6 @@
         IDs and drive directions live under <em>Calibrate → Base</em>.
       </p>
 
-      {#if settings.armOffset}
-        <h3>Arm mounting</h3>
-        <div class="row">
-          <label for="armoffx">Arm on base (m)</label>
-          <span class="triple">
-            {#each [0, 1, 2] as ax (ax)}
-              <input
-                id={ax === 0 ? 'armoffx' : undefined}
-                type="number"
-                step="0.005"
-                value={settings.armOffset[ax]}
-                onchange={(e) => settings.setArmOffset?.(ax as 0 | 1 | 2, +e.currentTarget.value)}
-              />
-            {/each}
-          </span>
-          <span class="val">x y z</span>
-        </div>
-        <p class="hint">
-          Where the arm sits on the LeKiwi base. Saved per robot. The arm's mount <em>rotation</em>
-          is a fixed mesh correction and isn't adjustable.
-        </p>
-      {/if}
 
       <h3>Cameras</h3>
       <div class="row">

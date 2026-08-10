@@ -20,8 +20,6 @@ class Settings {
   // Where the arm sits on the base (m). Owned by the Simulator (it's per-robot
   // and persisted per-robot), mirrored here so Settings can edit it without the
   // whole robot model having to move into a store.
-  armOffset = $state<[number, number, number] | null>(null);
-  setArmOffset: ((axis: 0 | 1 | 2, value: number) => void) | null = null;
 }
 
 export const settings = new Settings();
