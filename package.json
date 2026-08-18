@@ -1,0 +1,11 @@
+{
+  "name": "instant-robot-root",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix app run build",
+    "test": "npm --prefix app test",
+    "docs": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build"
+  }
+}

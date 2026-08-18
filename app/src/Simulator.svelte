@@ -5027,6 +5027,16 @@
           Forget places
         </button>
       {/if}
+      <span class="sep" aria-hidden="true">·</span>
+      <a
+        href="/docs/"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="subtle"
+        title="Open documentation and printable tag generator"
+      >
+        Docs & Tags ↗
+      </a>
     </div>
 
     {#if logOpen}

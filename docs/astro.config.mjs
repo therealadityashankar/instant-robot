@@ -5,8 +5,9 @@ import svelte from '@astrojs/svelte';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://therealadityashankar.github.io',
-  base: '/instant-robot',
+  site: 'https://instant.river.berlin',
+  base: '/docs',
+  outDir: '../app/dist/docs',
   integrations: [
     starlight({
       title: 'Instant Robot Docs',

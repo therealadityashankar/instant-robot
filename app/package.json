@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm --prefix ../docs run build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "tsx --test test/*.test.ts",
-    "deploy": "vite build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy"
   },
   "keywords": [],
   "author": "",

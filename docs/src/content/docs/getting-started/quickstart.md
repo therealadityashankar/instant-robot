@@ -20,7 +20,7 @@ Instant Robot gives you a full robotics simulator and real-hardware bridge runni
 
 To navigate in the physical world, your robot uses **6×6 ArUco fiducials**:
 
-1. Open the [**Printable Tag Generator**](/instant-robot/tags-and-navigation/tag-generator/).
+1. Open the [**Printable Tag Generator**](/docs/tags-and-navigation/tag-generator/).
 2. Generate your station cards (e.g. **DOCKING STATION**, **APPLE**, **SHELF**).
 3. Print the cards at **100% scale (no fit-to-page)** and attach them to your stations or objects.
 
