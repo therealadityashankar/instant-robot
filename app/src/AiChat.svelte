@@ -138,18 +138,6 @@
 </script>
 
 <div class="aichat">
-  <div class="chathead">
-    <div class="titlearea">
-      <span class="aipill">Gemini AI</span>
-      <span class="aimodel" title={settings.openrouterModel}>
-        {settings.openrouterModel.split('/')[1] || 'gemini'}
-      </span>
-    </div>
-    {#if !settings.openrouterApiKey}
-      <button class="keylink" onclick={() => (settings.open = true)}>Configure API Key</button>
-    {/if}
-  </div>
-
   {#if messages.length > 0}
     <div class="messages" bind:this={chatContainer}>
       {#each messages as msg (msg.id)}
@@ -262,58 +250,11 @@
     background: transparent;
     border: none;
     padding: 0.25rem 0;
-    margin-top: 0.6rem;
+    margin-top: 0.4rem;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
     font-family: inherit;
-  }
-
-  .chathead {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 0.1rem;
-  }
-
-  .titlearea {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .aipill {
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: #2563eb;
-    background: rgba(37, 99, 235, 0.08);
-    padding: 1px 6px;
-    border-radius: 4px;
-    letter-spacing: 0.01em;
-  }
-
-  .aimodel {
-    font-size: 0.68rem;
-    color: var(--muted, #6b7280);
-    max-width: 150px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .keylink {
-    background: none;
-    border: none;
-    color: #2563eb;
-    font-size: 0.72rem;
-    cursor: pointer;
-    padding: 0;
-    text-decoration: underline;
-    transition: color 0.15s;
-  }
-
-  .keylink:hover {
-    color: #1d4ed8;
   }
 
   .keyprompt-banner {

@@ -3694,6 +3694,29 @@
     return `${dist.toFixed(2)} m · ${dir}`;
   }
 
+  /** Summarize markers seen by the base camera along with their live distance. */
+  function baseCamMarkerSummary(): string {
+    if (!seenIds.length) return 'no markers';
+    const parts: string[] = [];
+    for (const id of seenIds) {
+      if (!tagsFromArm && tagPoses.length) {
+        const p = tagPoses.find((tp) => tp.id === id);
+        if (p) {
+          const d = Math.hypot(p.t[0], p.t[1], p.t[2]) / 1000;
+          parts.push(`Tag ${id} (${d.toFixed(2)}m)`);
+          continue;
+        }
+      }
+      if (shelfTagCam && id === navTagId) {
+        const d = Math.hypot(shelfTagCam[0], shelfTagCam[1], shelfTagCam[2]);
+        parts.push(`Tag ${id} (${d.toFixed(2)}m)`);
+        continue;
+      }
+      parts.push(`Tag ${id}`);
+    }
+    return parts.join(', ');
+  }
+
   /**
    * Turn a full circle, remembering every nav tag that comes into view. Progress
    * is tracked against the simulated yaw, which `applyBaseMotion` integrates from
@@ -4295,9 +4318,7 @@
       </div>
       <div class="cell">
         <span class="celllabel">
-          Base cam{remoteBaseLive ? ' (robot)' : camStream ? '' : ' (sim)'} · {seenIds.length
-            ? `sees ${seenIds.join(', ')}`
-            : 'no markers'}
+          Base cam{remoteBaseLive ? ' (robot)' : camStream ? '' : ' (sim)'} · {baseCamMarkerSummary()}
         </span>
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
@@ -4595,19 +4616,6 @@
       {#if navigating}
         <div class="controls"><button class="primary" onclick={toggleNavigate}>Stop</button></div>
       {/if}
-      <div class="status {shelfTagCam ? 'ok' : 'warn'}">
-        {#if shelfTagCam}
-          <!-- Robot-relative, matching the distance shown against each place. The
-               camera reads CAM_BASE_FWD less, and showing its raw depth here next
-               to a robot-relative figure elsewhere made the two disagree on
-               screen by exactly the mount offset. -->
-          tag {navTagId} · {(shelfTagCam[2] + CAM_BASE_FWD).toFixed(2)} m ahead ·
-          off-centre {Math.round((Math.atan2(shelfTagCam[0], shelfTagCam[2]) * 180) / Math.PI)}° ·
-          off-square {Math.round((shelfTagCam[3] * 180) / Math.PI)}°{navigating ? ' · going…' : ''}
-        {:else}
-          no nav tag in view
-        {/if}
-      </div>
       {#if baseLink.error}<div class="status bad">Base: {baseLink.error}</div>{/if}
     {/if}
 
@@ -4950,53 +4958,64 @@
       {/if}
 
     {#if hasBase && knownTags.size}
-      <details class="realbox" bind:open={shelfOpen}>
-        <summary><span class="sumhead">Shelves</span></summary>
-        <div class="pickrow">
-          <label for="shcount">Number of shelves</label>
-          <input id="shcount" type="number" min="0" max="8" step="1" bind:value={shelfCount} />
-        </div>
-        <p class="hint">
-          Step through the stages: <em>Drive</em> in front of the drawer, <em>Approach</em> the rod,
-          <em>Enter</em> onto it, <em>Grip</em>, then <em>Open</em> (pull) or <em>Close</em> (push).
-          {#if mode === 'real'}The same targets drive the real arm (and the Drive stage drives the wheels).{:else}Physics-only — the arm actually pushes/pulls the rod.{/if}
-        </p>
-        <div class="pickrow">
-          <label for="shx">Shelf X / Y (m)</label>
-          <input id="shx" type="number" step="0.02" bind:value={shelfX} />
-          <input type="number" step="0.02" bind:value={shelfY} />
-        </div>
-        <div class="pickrow">
-          <label for="shyaw">Shelf yaw / elev (°, m)</label>
-          <input id="shyaw" type="number" step="15" bind:value={shelfYawDeg} />
-          <input type="number" step="0.02" bind:value={shelfElevation} />
-        </div>
-        <div class="pickrow">
-          <span>Drawer</span>
-          <div class="graspmode">
-            {#each shelfOpens as open, i (i)}
-              <button class:active={shelfSel === i} onclick={() => (shelfSel = i)}>
-                {i + 1} · {Math.round(open * 100)}cm
-              </button>
-            {/each}
+      <div class="shelves-section">
+        {#if !shelfOpen}
+          <button class="subtle shelves-btn" onclick={() => (shelfOpen = true)}>
+            Shelves…
+          </button>
+        {:else}
+          <div class="realbox shelves-box">
+            <div class="shelves-head">
+              <h2>Shelves</h2>
+              <button class="linkish" onclick={() => (shelfOpen = false)}>hide</button>
+            </div>
+            <div class="pickrow">
+              <label for="shcount">Number of shelves</label>
+              <input id="shcount" type="number" min="0" max="8" step="1" bind:value={shelfCount} />
+            </div>
+            <p class="hint">
+              Step through the stages: <em>Drive</em> in front of the drawer, <em>Approach</em> the rod,
+              <em>Enter</em> onto it, <em>Grip</em>, then <em>Open</em> (pull) or <em>Close</em> (push).
+              {#if mode === 'real'}The same targets drive the real arm (and the Drive stage drives the wheels).{:else}Physics-only — the arm actually pushes/pulls the rod.{/if}
+            </p>
+            <div class="pickrow">
+              <label for="shx">Shelf X / Y (m)</label>
+              <input id="shx" type="number" step="0.02" bind:value={shelfX} />
+              <input type="number" step="0.02" bind:value={shelfY} />
+            </div>
+            <div class="pickrow">
+              <label for="shyaw">Shelf yaw / elev (°, m)</label>
+              <input id="shyaw" type="number" step="15" bind:value={shelfYawDeg} />
+              <input type="number" step="0.02" bind:value={shelfElevation} />
+            </div>
+            <div class="pickrow">
+              <span>Drawer</span>
+              <div class="graspmode">
+                {#each shelfOpens as open, i (i)}
+                  <button class:active={shelfSel === i} onclick={() => (shelfSel = i)}>
+                    {i + 1} · {Math.round(open * 100)}cm
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div class="pickrow">
+              <span>Stage</span>
+              <div class="graspmode wrap">
+                <button class:active={shelfStage === ''} onclick={() => (shelfStage = '')}>Off</button>
+                <button class:active={shelfStage === 'drive'} onclick={() => (shelfStage = 'drive')}>Drive</button>
+                <button class:active={shelfStage === 'approach'} onclick={() => (shelfStage = 'approach')}>Approach</button>
+                <button class:active={shelfStage === 'enter'} onclick={() => (shelfStage = 'enter')}>Enter</button>
+                <button class:active={shelfStage === 'grip'} onclick={() => (shelfStage = 'grip')}>Grip</button>
+                <button class:active={shelfStage === 'open'} onclick={() => (shelfStage = 'open')}>Open</button>
+                <button class:active={shelfStage === 'close'} onclick={() => (shelfStage = 'close')}>Close</button>
+              </div>
+            </div>
+            <div class="status {shelfStage !== '' ? 'ok' : 'warn'}">
+              drawer {shelfSel + 1} · {shelfStage || 'off'} · {Math.round((shelfOpens[shelfSel] ?? 0) * 100)} cm open
+            </div>
           </div>
-        </div>
-        <div class="pickrow">
-          <span>Stage</span>
-          <div class="graspmode wrap">
-            <button class:active={shelfStage === ''} onclick={() => (shelfStage = '')}>Off</button>
-            <button class:active={shelfStage === 'drive'} onclick={() => (shelfStage = 'drive')}>Drive</button>
-            <button class:active={shelfStage === 'approach'} onclick={() => (shelfStage = 'approach')}>Approach</button>
-            <button class:active={shelfStage === 'enter'} onclick={() => (shelfStage = 'enter')}>Enter</button>
-            <button class:active={shelfStage === 'grip'} onclick={() => (shelfStage = 'grip')}>Grip</button>
-            <button class:active={shelfStage === 'open'} onclick={() => (shelfStage = 'open')}>Open</button>
-            <button class:active={shelfStage === 'close'} onclick={() => (shelfStage = 'close')}>Close</button>
-          </div>
-        </div>
-        <div class="status {shelfStage !== '' ? 'ok' : 'warn'}">
-          drawer {shelfSel + 1} · {shelfStage || 'off'} · {Math.round((shelfOpens[shelfSel] ?? 0) * 100)} cm open
-        </div>
-      </details>
+        {/if}
+      </div>
     {/if}
     {#if (hasExplored || knownTags.size > 0) && !exploring}
       <!-- Gemini Voice & Text AI Assistant (placed cleanly at the bottom) -->
@@ -5070,6 +5089,9 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+  .panel > * {
+    flex-shrink: 0;
   }
   @media (max-width: 1080px) {
     .panel {
@@ -5336,9 +5358,16 @@
     background: var(--surface, #ffffff);
     overflow: hidden;
     margin-bottom: 0.6rem;
+    height: auto;
+    min-height: min-content;
+    flex-shrink: 0;
   }
   .place-row-container {
     border-bottom: 1px solid var(--line-soft, #e5e7eb);
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: min-content;
   }
   .place-row-container:last-child {
     border-bottom: none;
@@ -5348,6 +5377,8 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.35rem 0.6rem;
+    min-height: 2.2rem;
+    box-sizing: border-box;
   }
   .placerow strong.tag-label {
     min-width: 4.2rem;
@@ -5365,9 +5396,52 @@
     font-size: 0.75rem;
   }
   .place-actions {
-    padding: 0.4rem 0.6rem;
+    padding: 0.35rem 0.6rem;
     background: var(--surface-2, #f9fafb);
     border-top: 1px dashed var(--line-soft, #e5e7eb);
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: min-content;
+    box-sizing: border-box;
+  }
+  .place-actions .controls {
+    margin: 0.25rem 0;
+    gap: 0.35rem;
+  }
+  .place-actions button {
+    min-height: 1.6rem;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    border-radius: 4px;
+  }
+  .shelves-section {
+    margin-top: 0.35rem;
+  }
+  .shelves-btn {
+    font-size: 0.72rem;
+    color: var(--muted, #6b7280);
+    opacity: 0.75;
+    padding: 0.15rem 0.25rem;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    text-decoration: none;
+  }
+  .shelves-btn:hover {
+    opacity: 1;
+    color: var(--ink);
+    text-decoration: underline;
+  }
+  .shelves-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+  }
+  .shelves-head h2 {
+    margin: 0;
   }
   /* Present but easy to skip past — most sessions never need the arm controls. */
   .subtle {
