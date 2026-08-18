@@ -16,10 +16,28 @@ class Settings {
   /** Requested capture width; height follows 4:3. Applies on next connect. */
   camResW = $state(640);
 
-  // ── arm mounting offset ────────────────────────────────────────────────────
-  // Where the arm sits on the base (m). Owned by the Simulator (it's per-robot
-  // and persisted per-robot), mirrored here so Settings can edit it without the
-  // whole robot model having to move into a store.
+  // ── OpenRouter AI Assistant ────────────────────────────────────────────────
+  openrouterApiKey = $state(
+    typeof localStorage !== 'undefined' ? localStorage.getItem('openrouter_api_key') || '' : ''
+  );
+  openrouterModel = $state(
+    typeof localStorage !== 'undefined' ? localStorage.getItem('openrouter_model') || 'google/gemini-3.7-flash' : 'google/gemini-3.7-flash'
+  );
+
+  setOpenrouterApiKey(key: string) {
+    this.openrouterApiKey = key;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('openrouter_api_key', key);
+    }
+  }
+
+  setOpenrouterModel(model: string) {
+    this.openrouterModel = model;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('openrouter_model', model);
+    }
+  }
 }
 
 export const settings = new Settings();
+

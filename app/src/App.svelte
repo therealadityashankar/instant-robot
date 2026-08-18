@@ -16,7 +16,7 @@
   } from './lib/homography';
   import { drawRawPanel, drawRectifiedPanel } from './lib/render';
   import { DEFAULT_PARAMS, type BoardParams, type CalibState } from './lib/types';
-  import { saveIntrinsics, loadIntrinsics } from './lib/storage';
+  import { saveIntrinsics, loadIntrinsics, loadRemoteConfig, saveRemoteConfig } from './lib/storage';
   import { solvePnpTvec, meanStd } from './lib/pose';
   import { boardPoseFromTags, blockBoardXY } from './lib/detect3d';
   import { BORDERED_IDS } from './lib/board';
@@ -36,6 +36,34 @@
   import BaseCalibration from './BaseCalibration.svelte';
 
   let params = $state<BoardParams>({ ...DEFAULT_PARAMS });
+
+  // ── Remote-connect chooser (local USB vs. WebRTC to a Pi) ─────────────────
+  // One field, "room@token" — split back into the pair connectRemote below.
+  const savedRemote = loadRemoteConfig();
+  let remoteCombined = $state(savedRemote ? `${savedRemote.room}@${savedRemote.token}` : '');
+  let connectBtnEl: HTMLButtonElement | null = $state(null);
+  let connectModalEl: HTMLDivElement | null = $state(null);
+  const remoteParsed = $derived.by(() => {
+    const at = remoteCombined.indexOf('@');
+    if (at <= 0 || at === remoteCombined.length - 1) return null;
+    return { room: remoteCombined.slice(0, at).trim(), token: remoteCombined.slice(at + 1).trim() };
+  });
+  function connectRemote() {
+    if (!remoteParsed) return;
+    saveRemoteConfig(remoteParsed);
+    armLink.pickRemote({ signalOrigin: remoteWsOrigin(), room: remoteParsed.room, token: remoteParsed.token });
+  }
+  function remoteWsOrigin(): string {
+    return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+  }
+  function closeConnectChooser() {
+    armLink.chooserOpen = false;
+    connectBtnEl?.focus(); // dialog closed -> focus goes back to what opened it
+  }
+  // Move focus into the dialog the moment it opens, as a screen reader expects.
+  $effect(() => {
+    if (armLink.chooserOpen) connectModalEl?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+  });
 
   let cvReady = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -448,62 +476,6 @@
 </script>
 
 <div class="app">
-  <header class="topbar">
-    <div>
-      <h1>Instant Robot</h1>
-      <p class="subtitle">SO-101 inverse-kinematics simulator &amp; calibration</p>
-    </div>
-    <div class="topactions">
-      <button
-        class="big botbtn"
-        class:primary={!armLink.connected}
-        disabled={armLink.busy || !armLink.connect}
-        onclick={() => armLink.toggle()}
-        title={armLink.error ?? 'Connect to the Feetech servo bus over WebSerial'}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" />
-          <path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
-        </svg>
-        {armLink.busy ? 'Connecting…' : armLink.connected ? 'Disconnect motors' : 'Connect motors'}
-      </button>
-      <button class="primary big botbtn" onclick={() => (calibrateOpen = true)}>
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M12 20a8 8 0 1 0-8-8" /><path d="M12 8v4l3 2" /><path d="m4 12-2 2" />
-          <path d="m4 12 2 2" />
-        </svg>
-        Calibrate
-      </button>
-      <button class="big botbtn" onclick={() => (settings.open = true)} title="app-wide preferences">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-        Settings
-      </button>
-    </div>
-  </header>
   {#if armLink.error}
     <div class="toperror">Servo bus: {armLink.error}</div>
   {/if}
@@ -511,10 +483,57 @@
   <!-- Hidden source element; frames are read from it into OpenCV each tick. -->
   <video bind:this={video} playsinline muted style="display:none"></video>
 
-  <Simulator />
+  <Simulator onOpenCalibrate={() => (calibrateOpen = true)} />
 </div>
 
 <SettingsModal />
+
+{#if armLink.chooserOpen}
+  <div
+    class="modal-backdrop connectbackdrop"
+    role="button"
+    tabindex="-1"
+    onclick={closeConnectChooser}
+    onkeydown={(e) => e.key === 'Escape' && closeConnectChooser()}
+  >
+    <div
+      bind:this={connectModalEl}
+      class="modal connectmodal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="connect-modal-title"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="modal-head">
+        <h2 id="connect-modal-title">Connect robot</h2>
+        <button class="close" aria-label="Close" onclick={closeConnectChooser}>✕</button>
+      </div>
+      <div class="modal-body connectbody">
+        <button data-autofocus class="connectsq" onclick={() => armLink.pickLocal()}>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 22v-5" /><path d="M9 8V2" /><path d="M15 8V2" />
+            <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+          </svg>
+          Local (USB)
+        </button>
+        <div class="connector"><span>or</span></div>
+        <div class="connectremote">
+          <label for="connect-combined">Room connection code</label>
+          <input id="connect-combined" type="password" bind:value={remoteCombined} />
+          <button class="connectbtn" disabled={!remoteParsed} onclick={connectRemote}> Connect </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if calibrateOpen}
   <div

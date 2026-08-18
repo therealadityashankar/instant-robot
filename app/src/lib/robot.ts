@@ -11,7 +11,27 @@
 
 import { ScsServoSDK } from 'feetech.js';
 
-export class Robot {
+/**
+ * The slice of servo-bus behaviour every backend (local WebSerial, remote
+ * WebRTC) must provide. `baseLink.svelte.ts` holds one of these behind a
+ * facade so the rest of the app — IK streaming, wheel drive, calibration —
+ * never has to know whether the bus is a USB cable or a peer connection to a
+ * Pi across the room.
+ */
+export interface RobotLike {
+  connected: boolean;
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  readPosition(servoId: number): Promise<number>;
+  syncReadPositions(servoIds: number[]): Promise<Map<number, number>>;
+  setTorque(servoIds: number[], enable: boolean): Promise<void>;
+  syncWritePositions(targets: Map<number, number>): Promise<'success'>;
+  setWheelMode(servoIds: number[]): Promise<void>;
+  syncWriteWheelSpeed(speeds: Map<number, number>): Promise<'success'>;
+  writeWheelSpeed(servoId: number, speed: number): Promise<'success'>;
+}
+
+export class Robot implements RobotLike {
   private sdk = new ScsServoSDK();
   connected = false;
   // Serializes all bus I/O: each call chains after the previous one settles.

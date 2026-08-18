@@ -64,6 +64,37 @@
         <em>Refresh</em> under the camera view after changing it. Smaller frames mean coarser tag
         detection at distance, so drop it only as far as you need.
       </p>
+
+      <h3>Gemini AI (OpenRouter)</h3>
+      <div class="row">
+        <label for="setorkey">OpenRouter API Key</label>
+        <input
+          id="setorkey"
+          type="password"
+          placeholder="sk-or-v1-..."
+          value={settings.openrouterApiKey}
+          onchange={(e) => settings.setOpenrouterApiKey((e.currentTarget as HTMLInputElement).value)}
+        />
+        <span class="val"></span>
+      </div>
+      <div class="row">
+        <label for="setormodel">Model</label>
+        <select
+          id="setormodel"
+          value={settings.openrouterModel}
+          onchange={(e) => settings.setOpenrouterModel((e.currentTarget as HTMLSelectElement).value)}
+        >
+          <option value="google/gemini-3.7-flash">google/gemini-3.7-flash (Newest, fast audio &amp; tools)</option>
+          <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
+          <option value="google/gemini-2.0-flash-001">google/gemini-2.0-flash-001</option>
+          <option value="google/gemini-2.5-pro">google/gemini-2.5-pro (High capability)</option>
+          <option value="google/gemini-flash-1.5">google/gemini-flash-1.5</option>
+        </select>
+        <span class="val"></span>
+      </div>
+      <p class="hint">
+        Powers text &amp; voice control for the robot. OpenRouter allows you to set strict spend limits on your API key so funds cannot get drained.
+      </p>
     </div>
   </div>
 {/if}

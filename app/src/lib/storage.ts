@@ -11,6 +11,7 @@ const JOINT_KEY = 'instant-robot:joint-calibration';
 const INTRINSICS_KEY = 'instant-robot:camera-intrinsics';
 const ROBOT_KEY = 'instant-robot:selected-robot';
 const BASE_CFG_KEY = 'instant-robot:base-config'; // LeKiwi wheel-drive config
+const REMOTE_CFG_KEY = 'instant-robot:remote-robot'; // room code + shared token for remote connect
 
 function read<T>(key: string): T | null {
   try {
@@ -64,4 +65,18 @@ export function saveBaseConfig(c: BaseConfig) {
 export function loadBaseConfig(): Partial<BaseConfig> | null {
   const d = read<Partial<BaseConfig>>(BASE_CFG_KEY);
   return d && typeof d === 'object' ? d : null;
+}
+
+export interface RemoteRobotConfig {
+  room: string;
+  token: string;
+}
+
+export function saveRemoteConfig(c: RemoteRobotConfig) {
+  write(REMOTE_CFG_KEY, c);
+}
+
+export function loadRemoteConfig(): RemoteRobotConfig | null {
+  const d = read<RemoteRobotConfig>(REMOTE_CFG_KEY);
+  return d && typeof d.room === 'string' && typeof d.token === 'string' ? d : null;
 }

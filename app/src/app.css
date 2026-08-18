@@ -25,8 +25,13 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--ink);
   font-family: 'Quicksand', system-ui, sans-serif;
@@ -41,9 +46,14 @@ h1 {
 }
 
 .app {
-  max-width: 1320px;
-  margin: 0 auto;
-  padding: 1rem 1.25rem 3rem;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .subtitle {
@@ -285,39 +295,240 @@ table.readout td.empty {
   margin-bottom: 1rem;
   flex-wrap: wrap;
 }
-/* shadcn `default` size: a touch taller than the compact base, same 14px text. */
 button.big {
   min-height: 2.25rem;
   padding: 0.5rem 1rem;
 }
-button.botbtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-/* Top bar: shadcn's `default` variant — solid near-black, white label. These are
-   the app's entry points (connect, calibrate, settings), so they carry the
-   strongest weight on the page; the green accent stays for in-panel actions. */
-.topactions button,
-.topactions button.primary {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--surface);
-}
-.topactions button:hover,
-.topactions button.primary:hover {
-  background: #1f2937; /* zinc-800-ish lift on hover */
-  border-color: #1f2937;
-}
-button.botbtn svg {
-  width: 1.25rem;
-  height: 1.25rem;
-}
+
+/* Outline segmented button group (Connect robot, Calibrate, Settings) */
 .topactions {
   display: flex;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.btngroup {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  background: var(--surface);
+}
+
+.btngroup .btngroup-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 2.1rem;
+  height: 2.1rem;
+  padding: 0 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1px solid var(--line-soft);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: none;
+  margin-left: -1px;
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    z-index 0.15s ease;
+}
+
+.btngroup .btngroup-btn:first-child {
+  margin-left: 0;
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+
+.btngroup .btngroup-btn:last-child {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.btngroup .btngroup-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--muted);
+  z-index: 2;
+}
+
+.btngroup .btngroup-btn:focus-visible {
+  z-index: 3;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.btngroup .btngroup-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btngroup .btngroup-btn svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
+  display: block;
+}
+
+.btngroup .btngroup-btn.icon-only {
+  flex: 0 0 2.5rem;
+  width: 2.5rem;
+  padding: 0;
+}
+
+.btngroup .btngroup-btn.icon-only svg {
+  width: 1rem;
+  height: 1rem;
+  display: block;
+}
+
+.btngroup .btngroup-btn.active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent-hover);
+  border-color: var(--accent);
+  font-weight: 600;
+  z-index: 2;
+}
+/* `.modal-backdrop` pins to the top for the big scrollable Calibrate modal; this
+   one is small enough to sit centred. Two classes to outrank that rule. */
+.modal-backdrop.connectbackdrop {
+  align-items: center;
+}
+/* `.modal` is defined further down with the same specificity, so it would win on
+   source order alone — hence `.modal.connectmodal`, which outranks it. */
+.modal.connectmodal {
+  width: min(470px, 100%);
+  max-height: 300px;
+}
+.connectmodal #connect-modal-title {
+  font-weight: 400;
+  font-size: 0.9rem;
+}
+.connectmodal .modal-head {
+  padding: 0.5rem 0.6rem;
+}
+.connectmodal .modal-body {
+  padding: 0.6rem;
+}
+.connectbody {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+/* shadcn's `outline` Button variant: white fill, gray-200 border, a hairline
+   shadow instead of a heavy one, subtle gray hover, a 2px ring on focus.
+   min-height/min-width reset to 0 — the base `button` rule floors both at
+   2rem/2.5rem, which otherwise blows past this modal's own width/height caps. */
+.connectsq,
+.connectbtn {
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 0.375rem; /* rounded-md */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); /* shadow-sm */
+  font-size: 0.8rem; /* text-sm, scaled to the modal */
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.connectsq:hover,
+.connectbtn:hover {
+  background: var(--surface-2);
+}
+.connectsq:focus-visible,
+.connectbtn:focus-visible,
+.connectremote input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+.connectsq {
+  flex: 1;
+  min-width: 0;
+  width: 0; /* forces the flex:1 split to be exactly 50/50, not content-sized */
+  aspect-ratio: 1;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  text-align: center;
+  line-height: 1.1;
+}
+.connectsq svg {
+  width: 1.6rem;
+  height: 1.6rem;
+  flex: none;
+}
+/* Full-height rule split by an "or": two flex-grown 1px lines with the word
+   between them, stretched to the tallest item in the row (the square button). */
+.connector {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.connector::before,
+.connector::after {
+  content: '';
+  flex: 1;
+  width: 1px;
+  background: var(--line-soft);
+}
+.connectremote {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.3rem;
+}
+.connectremote label {
+  font-size: 0.72rem;
+  line-height: 1.2;
+  opacity: 0.75;
+}
+.connectremote input {
+  height: 2rem;
+  width: 100%;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.375rem;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  font-size: 0.8rem;
+  min-width: 0;
+  box-sizing: border-box;
+  text-align: center;
+}
+.connectbtn {
+  height: 2rem;
+  width: 100%;
+  padding: 0.2rem 0.4rem;
+  box-sizing: border-box;
+}
+.connectbtn:disabled,
+.connectsq:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .toperror {
   margin: -0.5rem 0 1rem;
@@ -371,32 +582,10 @@ button.botbtn svg {
 .modal .close {
   border: none;
   background: none;
+  box-shadow: none;
   font-size: 1.1rem;
   padding: 0.25rem 0.5rem;
 }
 .modal-body {
   padding: 1.1rem;
-}
-
-/* A one-off pointer at the Explore button, shown only while nothing has been
-   discovered — at that moment the panel below it is empty, and an empty panel
-   doesn't say what to do next. */
-.nudgehint {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.35rem;
-  margin: 0.15rem 0 0.6rem 0.6rem;
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
-  max-width: 15rem;
-}
-.nudgehint svg {
-  width: 2.3rem;
-  height: 1.8rem;
-  flex: none;
-  opacity: 0.75;
-}
-.nudgehint span {
-  padding-top: 0.7rem;
 }

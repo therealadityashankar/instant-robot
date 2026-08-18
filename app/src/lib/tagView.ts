@@ -47,6 +47,7 @@ export class TagView {
   private controls: OrbitControls;
   private robotGroup: THREE.Group;
   private tagGroup: THREE.Group;
+  private placeGroup: THREE.Group;
   private robotMeshes: Array<{ mesh: THREE.Mesh; geomId: number }> = [];
   private model: MjModel | null = null;
   private data: MjData | null = null;
@@ -77,7 +78,8 @@ export class TagView {
 
     this.robotGroup = new THREE.Group();
     this.tagGroup = new THREE.Group();
-    this.scene.add(this.robotGroup, this.tagGroup);
+    this.placeGroup = new THREE.Group();
+    this.scene.add(this.robotGroup, this.tagGroup, this.placeGroup);
   }
 
   /** Build robot meshes once for the given geom ids (arm + base only). */
@@ -124,6 +126,47 @@ export class TagView {
         0, 0, 0, 1,
       );
       mesh.quaternion.setFromRotationMatrix(m);
+    }
+  }
+
+  /**
+   * Replace the remembered places — somewhere the robot has been told a nav tag
+   * is, rather than somewhere it can see one right now.
+   *
+   * Drawn deliberately unlike a detection: a ring on the floor with a stem and a
+   * dimmer, translucent label. The two must not be confusable, because one is a
+   * live measurement and the other is a memory that may be stale or simply wrong.
+   */
+  setPlaces(places: { id: number; p: [number, number, number] }[]) {
+    for (const child of this.placeGroup.children) {
+      const c = child as THREE.Mesh & THREE.Sprite;
+      c.geometry?.dispose?.();
+      const mat = c.material as THREE.Material & { map?: THREE.Texture };
+      mat?.map?.dispose?.();
+      mat?.dispose?.();
+    }
+    this.placeGroup.clear();
+    for (const place of places) {
+      const color = hueColor(place.id);
+      const [x, y, z] = place.p;
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.05, 0.075, 28),
+        new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.55 }),
+      );
+      ring.position.set(x, y, 0.002); // on the floor, under where the tag is
+      this.placeGroup.add(ring);
+      const stem = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(x, y, 0),
+          new THREE.Vector3(x, y, z),
+        ]),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.45 }),
+      );
+      this.placeGroup.add(stem);
+      const label = labelSprite(String(place.id), color);
+      label.position.set(x, y, z + 0.06);
+      (label.material as THREE.SpriteMaterial).opacity = 0.75;
+      this.placeGroup.add(label);
     }
   }
 

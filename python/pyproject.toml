@@ -1,0 +1,31 @@
+[project]
+name = "lekiwi-bridge"
+version = "0.1.0"
+description = "Minimal transport bridge for a remotely-controlled LeKiwi: servo bus + cameras + WebRTC, no policy/vision/IK on-device."
+readme = "README.md"
+requires-python = ">=3.11"
+# NOTE: `scservo_sdk` is deliberately NOT listed here. The build in use is a
+# generic Feetech fork (Dynamixel-style API, no `sms_sts` class) that isn't
+# published to PyPI under that name — pip resolves it to nothing and the whole
+# install fails. It's expected to be already present in the venv; `bus.py`
+# imports it directly. See the README for how to check.
+dependencies = [
+    "pyserial>=3.5",
+    # WebRTC peer. aiortc pulls in av (ffmpeg bindings) and cryptography — the
+    # heaviest deps here by far. Verify these install as prebuilt wheels on the
+    # target trixie/arm64 image before relying on this; a source build on a
+    # Zero 2 W is slow and may need swap.
+    "aiortc>=1.9",
+    "websockets>=13",
+    # Direct V4L2 access so MJPEG-mode camera frames are forwarded as the raw
+    # JPEG bytes the driver already produced — no decode, no re-encode, no
+    # OpenCV. This is the whole reason capture is cheap enough for a Zero 2 W.
+    "v4l2py>=3.0",
+]
+
+[project.scripts]
+lekiwi-bridge = "lekiwi_bridge.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

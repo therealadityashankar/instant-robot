@@ -8,7 +8,9 @@
   } from './lib/mujocoSession';
   import { IKSolver } from './lib/ik';
   import { MujocoRenderer, PovView } from './lib/mujocoRender';
-  import { TagView, type WorldTag } from './lib/tagView';
+  import { Map2DView, type MapLiveTag } from './lib/map2DView';
+  import AiChat from './AiChat.svelte';
+  import type { RobotStateContext, RobotActionCallbacks } from './lib/aiAssistant';
   import { CALIBRATION_PLAN, simRadToServo, servoToSimRad, type JointCalibration } from './lib/joints';
   import {
     saveJointCalibration,
@@ -55,6 +57,7 @@
   } from './lib/rot';
   import type { Intrinsics } from './lib/charuco';
   import { armLink } from './lib/armLink.svelte';
+  import { RemoteCameraSink } from './lib/remoteVideo';
   import { baseLink, robot } from './lib/baseLink.svelte';
   import { settings } from './lib/settings.svelte';
   import { markerCanvas } from './lib/arucoImage';
@@ -103,9 +106,11 @@
   const ARM_DOFS = [0, 1, 2, 3, 4];
   const GRASP_SITE = 'graspframe';
 
+  let { onOpenCalibrate }: { onOpenCalibrate?: () => void } = $props();
+
   let canvas: HTMLCanvasElement;
   let tagCanvas = $state<HTMLCanvasElement>();
-  let tagView: TagView | null = null;
+  let tagView: Map2DView | null = null;
   let stepsOpen = $state(false); // the 1-8 pick steps, collapsed by default
   let manualArm = $state(false); // low-level arm controls, hidden until asked for
   let shelfOpen = $state(false); // the shelves section, collapsed by default
@@ -128,6 +133,7 @@
   let exploring = $state(false);
   let exploreCancel = false;
   let exploreProgress = $state(0); // 0..1 of a full turn
+  let hasExplored = $state(false);
   // Detected tags in the CAMERA frame (R marker→camera, t mm) — transformed to world
   // for the tag view via the onboard-camera mount.
   type CamTag = { id: number; R: number[]; t: number[]; sizeMm: number };
@@ -310,6 +316,46 @@
   let video: HTMLVideoElement;
   let previewVideo = $state<HTMLVideoElement>();
   let camStream = $state<MediaStream | null>(null);
+
+  // Cameras on a remotely-driven robot. Frames arrive as JPEGs over the WebRTC
+  // datachannel and are decoded onto canvases, which the detector and the preview
+  // panels consume exactly like a local webcam. Camera 0 is the base, 1 the arm —
+  // the order the Pi enumerates them by USB port.
+  const remoteCams = new RemoteCameraSink();
+  const REMOTE_BASE_CAM = 0;
+  const REMOTE_ARM_CAM = 1;
+  // Reactive mirror of the sink (a plain class can't be read in markup); flipped
+  // only when a camera's presence actually changes.
+  let remoteBaseLive = $state(false);
+  let remoteArmLive = $state(false);
+  // Visible panel canvases; the sink's own canvases are offscreen and sized by
+  // the incoming frames, so each is blitted here to fit the panel.
+  let remoteBaseCanvas = $state<HTMLCanvasElement>();
+  let remoteArmCanvas = $state<HTMLCanvasElement>();
+  remoteCams.onFrame = (cam) => {
+    if (cam === REMOTE_BASE_CAM && !remoteBaseLive) remoteBaseLive = true;
+    if (cam === REMOTE_ARM_CAM && !remoteArmLive) remoteArmLive = true;
+    paintRemote(cam);
+  };
+
+  let activeRemoteCam = $state<number>(REMOTE_BASE_CAM);
+
+  async function selectRemoteCamera(cam: number) {
+    activeRemoteCam = cam;
+    await robot.setActiveCamera(cam).catch((e) => console.warn('setActiveCamera failed', e));
+  }
+
+  /** Blit the newest decoded frame into whichever panel canvas owns that camera. */
+  function paintRemote(cam: number) {
+    const src = remoteCams.canvas(cam);
+    const dst = cam === REMOTE_BASE_CAM ? remoteBaseCanvas : remoteArmCanvas;
+    if (!src || !dst) return;
+    if (dst.width !== src.width || dst.height !== src.height) {
+      dst.width = src.width;
+      dst.height = src.height;
+    }
+    dst.getContext('2d')?.drawImage(src, 0, 0);
+  }
   let camDeviceId = $state<string>(''); // selected onboard/base camera (blank → default)
   // `baseCamOff` is the user having deliberately turned the base camera off — it
   // stops real mode from starting it back up. The bandwidth levers themselves
@@ -332,7 +378,10 @@
   // Vision steps work off a real arm camera or the rendered one — detection takes
   // whichever exists, so gating those buttons on a USB stream locked them out of
   // the simulation for no reason.
-  const armCamReady = $derived(!!armCamStream || !!armPovView);
+  // A remote robot's arm camera counts too — the pick steps only need *a* stream
+  // of arm-eye frames, and gating on the local USB one locked remote mode out of
+  // the whole pick pipeline.
+  const armCamReady = $derived(!!armCamStream || !!armPovView || remoteArmLive);
   let armGrabCtx: CanvasRenderingContext2D | null = null;
   let armSrcMat: any = null;
   let armGrayMat: any = null;
@@ -361,6 +410,7 @@
     pickLog = pickLogBuf;
   });
   let armPickBusy = $state(false);
+  let logOpen = $state(false);
   /**
    * The pose the arm eases to in order to look at whatever the robot is parked at,
    * as joint angles (rad): [pan, lift, elbow, wrist_flex, wrist_roll].
@@ -1186,7 +1236,6 @@
       readShelfOpens();
     }
     robotGeomIds = computeRobotGeoms();
-    tagView?.setRobot(session.model, session.data, robotGeomIds);
     session.forward();
     target = solver.sitePosition();
 
@@ -1419,11 +1468,12 @@
     if (armPovCanvas && !armPovView && renderer) armPovView = new PovView(armPovCanvas, renderer.sceneRef);
   });
 
-  // Lazily create the tag view once its canvas mounts; render it when it's active.
+  // Lazily create the 2D map view once its canvas mounts.
   $effect(() => {
     if (tagCanvas && !tagView) {
-      tagView = new TagView(tagCanvas);
-      if (session && robotGeomIds.length) tagView.setRobot(session.model, session.data, robotGeomIds);
+      tagView = new Map2DView(tagCanvas, {
+        onSelectPlace: (id) => driveToTag(id),
+      });
       fitCanvas();
     }
   });
@@ -1614,25 +1664,38 @@
   }
 
   let lastRenderedTags: CamTag[] | null = null;
+  let lastRenderedPlaces: typeof knownTags | null = null;
   function renderTagView() {
     if (!tagView) return;
+    tagView.setRobotPose(hasBase ? robotX : 0, hasBase ? robotY : 0, hasBase ? robotYawDeg : 0, hasBase);
+    tagView.setNavigatingTarget(navigating ? navTagId : null);
+    tagView.setArrivedPlace(atTag);
+
     if (tagPoses !== lastRenderedTags) {
-      // Transform each camera-frame tag into world using whichever camera saw it.
       const cam = tagsFromArm ? armCameraWorld() : cameraWorld();
-      const world: WorldTag[] = tagPoses.map((tg) => {
+      const world: MapLiveTag[] = tagPoses.map((tg) => {
         const pCam: [number, number, number] = [tg.t[0] / 1000, tg.t[1] / 1000, tg.t[2] / 1000];
         const pw = apply3(cam.R, pCam);
         return {
           id: tg.id,
           sizeMm: tg.sizeMm,
-          R: matMul3(cam.R, tg.R),
           p: [pw[0] + cam.t[0], pw[1] + cam.t[1], pw[2] + cam.t[2]] as [number, number, number],
         };
       });
-      tagView.setTags(world); // rebuild only when detection updates (~10 Hz)
+      tagView.setTags(world);
       lastRenderedTags = tagPoses;
     }
-    tagView.render(); // every frame for smooth orbit damping
+
+    if (knownTags !== lastRenderedPlaces) {
+      tagView.setPlaces([...knownTags.values()].map((k) => ({
+        id: k.id,
+        p: [k.x, k.y, k.z],
+        faceYaw: k.faceYaw,
+      })));
+      lastRenderedPlaces = knownTags;
+    }
+
+    tagView.render();
   }
 
   // Drive the arm toward a fixed joint pose (no IK), rate-limited by the global
@@ -2104,8 +2167,10 @@
   // the arm is doing — so the list of tags it can see is always live.
   function maybeDetectArm() {
     if (!cv || !detector) return;
-    const live = !!armCamStream;
-    const source: CanvasImageSource | null = live ? armVideo : (armPovCanvas ?? null);
+    const remote = remoteCams.canvas(REMOTE_ARM_CAM);
+    const live = !!armCamStream || !!remote;
+    const source: CanvasImageSource | null =
+      remote ?? (armCamStream ? armVideo : (armPovCanvas ?? null));
     if (!source) return;
     if (!ensureArmGrab(live)) return;
     if (!live && !armPovView) return;
@@ -2263,7 +2328,10 @@
 
     if (cv && detector && armGrabCtx && armSrcMat && armGrayMat && intr) {
       const { width, height } = armGrabCtx.canvas;
-      armGrabCtx.drawImage(armCamStream ? armVideo : (armPovCanvas as CanvasImageSource), 0, 0, width, height);
+      const armSrc =
+        remoteCams.canvas(REMOTE_ARM_CAM) ??
+        (armCamStream ? armVideo : (armPovCanvas as CanvasImageSource));
+      armGrabCtx.drawImage(armSrc, 0, 0, width, height);
       armSrcMat.data.set(armGrabCtx.getImageData(0, 0, width, height).data);
       cv.cvtColor(armSrcMat, armGrayMat, cv.COLOR_RGBA2GRAY);
       const c = detectMarkers(cv, detector, armGrayMat).get(id);
@@ -3188,8 +3256,13 @@
    */
   function ensureGrab(live: boolean): boolean {
     if (!cv) return false;
-    const w = live ? video.videoWidth || 640 : settings.camResW;
-    const h = live ? video.videoHeight || 480 : Math.round((settings.camResW * 3) / 4);
+    const remote = remoteCams.canvas(REMOTE_BASE_CAM);
+    const w = remote ? remote.width : live ? video.videoWidth || 640 : settings.camResW;
+    const h = remote
+      ? remote.height
+      : live
+        ? video.videoHeight || 480
+        : Math.round((settings.camResW * 3) / 4);
     if (w < 8 || h < 8) return false;
     if (grabCtx && camW === w && camH === h) return true;
     camW = w;
@@ -3211,8 +3284,13 @@
 
   function ensureArmGrab(live: boolean): boolean {
     if (!cv) return false;
-    const w = live ? armVideo.videoWidth || 640 : settings.camResW;
-    const h = live ? armVideo.videoHeight || 480 : Math.round((settings.camResW * 3) / 4);
+    const remote = remoteCams.canvas(REMOTE_ARM_CAM);
+    const w = remote ? remote.width : live ? armVideo.videoWidth || 640 : settings.camResW;
+    const h = remote
+      ? remote.height
+      : live
+        ? armVideo.videoHeight || 480
+        : Math.round((settings.camResW * 3) / 4);
     if (w < 8 || h < 8) return false;
     if (armGrabCtx && armCamW === w && armCamH === h) return true;
     armCamW = w;
@@ -3237,8 +3315,11 @@
     // Frames come from the real camera when one is attached, otherwise from the
     // rendered robot's-eye view — same detector either way, so the sim can't
     // drift away from the hardware behaviour.
-    const live = !!camStream;
-    const source: CanvasImageSource | null = live ? video : (povCanvas ?? null);
+    // A remotely-driven robot's camera counts as "live" in every sense the
+    // detector cares about: real optics, real intrinsics, arbitrary frame size.
+    const remote = remoteCams.canvas(REMOTE_BASE_CAM);
+    const live = !!camStream || !!remote;
+    const source: CanvasImageSource | null = remote ?? (camStream ? video : (povCanvas ?? null));
     if (!source) return;
     if (!ensureGrab(live)) return;
     if (!live && !povView) return;
@@ -3362,17 +3443,35 @@
     stage = next;
   }
 
-  async function connectRobot() {
+  async function afterConnect() {
+    realConnected = true;
+    await robot.setTorque(
+      CALIBRATION_PLAN.map((j) => j.servoId),
+      true,
+    );
+    await seedSimFromRobot(); // match the sim to the arm's live pose (no sudden jump)
+    await autoDetectWheels(); // a >6-servo chain means a mobile base is attached
+  }
+
+  async function connectRobotLocal() {
     realError = null;
     try {
-      await robot.connect();
-      realConnected = true;
-      await robot.setTorque(
-        CALIBRATION_PLAN.map((j) => j.servoId),
-        true,
-      );
-      await seedSimFromRobot(); // match the sim to the arm's live pose (no sudden jump)
-      await autoDetectWheels(); // a >6-servo chain means a mobile base is attached
+      await robot.connectLocal();
+      await afterConnect();
+    } catch (e) {
+      realError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function connectRobotRemote(opts: import('./lib/remoteRobot').RemoteRobotOptions) {
+    realError = null;
+    try {
+      await robot.connectRemote(opts);
+      remoteCams.clear();
+      remoteBaseLive = false;
+      remoteArmLive = false;
+      robot.onVideoFrame((cam, jpeg) => void remoteCams.push(cam, jpeg));
+      await afterConnect();
     } catch (e) {
       realError = e instanceof Error ? e.message : String(e);
     }
@@ -3380,7 +3479,8 @@
 
   // Let the header's Connect button drive the same logic, and mirror the state
   // back so it can show connected / error without owning any of it.
-  armLink.connect = connectRobot;
+  armLink.connectLocal = connectRobotLocal;
+  armLink.connectRemote = connectRobotRemote;
   armLink.disconnect = disconnectRobot;
   $effect(() => {
     armLink.connected = realConnected;
@@ -3576,6 +3676,7 @@
   function forgetTags() {
     knownTags = new Map();
     atTag = null;
+    hasExplored = false;
   }
 
   /** Human-readable "where is this place" for a remembered tag. */
@@ -3626,6 +3727,9 @@
         if (performance.now() - t0 > 60000) break; // never spin forever
         baseVel.turn = 1; // set directly — turnRobot defers to us while exploring
         await delay(80); // detection runs in the render loop as we turn
+      }
+      if (!exploreCancel) {
+        hasExplored = true;
       }
     } finally {
       zeroBaseVel();
@@ -4064,6 +4168,75 @@
     }
   });
 
+  const aiContext = $derived<RobotStateContext>({
+    robotX: hasBase ? robotX : 0,
+    robotY: hasBase ? robotY : 0,
+    robotYawDeg: hasBase ? robotYawDeg : 0,
+    hasBase,
+    exploring,
+    navigating,
+    activeNavTag: navigating ? navTagId : null,
+    atTag,
+    holdingItem,
+    knownStations: [...knownTags.values()].map((t) => ({
+      id: t.id,
+      label: `Tag ${t.id}`,
+      x: t.x,
+      y: t.y,
+    })),
+    armDetectedTags: armDetectedTags || [],
+    baseDetectedTags: seenIds || [],
+    activeCamera: activeRemoteCam === REMOTE_ARM_CAM ? 'arm' : 'base',
+  });
+
+  const aiCallbacks: RobotActionCallbacks = {
+    onNavigate: async (stationId: number) => {
+      if (!hasBase) throw new Error('Robot base is not supported in current mode');
+      if (!knownTags.has(stationId)) {
+        throw new Error(`Station ${stationId} has not been discovered yet. Please run Explore first.`);
+      }
+      driveToTag(stationId);
+      return `Navigating to station ${stationId}`;
+    },
+    onPickTag: async (tagId?: number) => {
+      const targetTag = tagId || (armDetectedTags.length ? armDetectedTags[0] : null);
+      if (!targetTag) throw new Error('No target object in view to pick.');
+      pickUpTag(targetTag);
+      return `Initiating pick for tag ${targetTag}`;
+    },
+    onExplore: async () => {
+      if (!hasBase) throw new Error('Base is required for exploration');
+      explore();
+      return 'Exploring arena';
+    },
+    onLookForItems: async () => {
+      lookForItems();
+      return 'Scanning for items at current station';
+    },
+    onPutInBasket: async () => {
+      putInBasket();
+      return 'Delivering item to basket';
+    },
+    onOpenGripper: async () => {
+      openGripper();
+      return 'Gripper opened';
+    },
+    onResetToCenter: async () => {
+      resetRobotToCentre();
+      return 'Reset base to center';
+    },
+    onSwitchCamera: async (cam: 'base' | 'arm') => {
+      selectRemoteCamera(cam === 'arm' ? REMOTE_ARM_CAM : REMOTE_BASE_CAM);
+      return `Switched camera to ${cam}`;
+    },
+    onStop: async () => {
+      if (exploring) exploreCancel = true;
+      if (navigating) toggleNavigate();
+      if (lookingForItems) lookCancel = true;
+      return 'Stopped robot actions';
+    },
+  };
+
   onDestroy(() => {
     cancelAnimationFrame(raf);
     stopCamera();
@@ -4080,8 +4253,8 @@
 
 <div class="sim">
   <div class="viewer" bind:this={wrap}>
-    <div class="grid4">
-      <div class="cell">
+    <div class="gridmain">
+      <div class="cell main">
         <select
           class="celllabel cellsel"
           value={selectedRobot}
@@ -4093,6 +4266,15 @@
           {/each}
         </select>
         <canvas bind:this={canvas}></canvas>
+        {#if hasBase}
+          <!-- Inside the world view, not the viewer: pinned to the viewer it sat
+               over whichever panel happened to be bottom-left, which is now the
+               tag view. It steers the robot shown here. -->
+          <div class="joyoverlay">
+            <DriveTriad onmove={setDrive} />
+            <RotationControl onrotate={turnRobot} />
+          </div>
+        {/if}
         <div class="camctl">
           <button onclick={copyCameraOrientation} title="copy this viewpoint to the clipboard">
             Copy view
@@ -4105,165 +4287,311 @@
         </div>
       </div>
       <div class="cell">
-        <span class="celllabel">Tags</span>
+        <span class="celllabel">2D Map</span>
         <canvas bind:this={tagCanvas}></canvas>
         <span class="cellnote">
-          robot + {mode === 'real'
-            ? `${tagPoses.length} tag${tagPoses.length === 1 ? '' : 's'}`
-            : '(connect the motors to see tags)'}
+          {tagPoses.length} live · {knownTags.size} discovered
         </span>
       </div>
       <div class="cell">
         <span class="celllabel">
-          Base cam{camStream ? '' : ' (sim)'} · {seenIds.length
+          Base cam{remoteBaseLive ? ' (robot)' : camStream ? '' : ' (sim)'} · {seenIds.length
             ? `sees ${seenIds.join(', ')}`
             : 'no markers'}
         </span>
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video bind:this={previewVideo} playsinline muted class:hidden={!camStream}></video>
-        {#if !camStream}<canvas bind:this={povCanvas}></canvas>{/if}
-        <div class="camctl">
-          <select bind:value={camDeviceId} aria-label="base camera device">
-            <option value="">default</option>
-            {#each videoDevices as d, i (d.deviceId)}
-              <option value={d.deviceId}>{d.label || `camera ${i + 1}`}</option>
-            {/each}
-          </select>
-          {#if camStream}
-            <button onclick={reconnectBaseCamera}>Refresh</button>
-            <button onclick={disconnectBaseCamera}>Off</button>
-          {:else}
-            <button class="primary" onclick={reconnectBaseCamera}>Connect</button>
-          {/if}
-        </div>
+        <video
+          bind:this={previewVideo}
+          playsinline
+          muted
+          class:hidden={!camStream || remoteBaseLive}
+        ></video>
+        {#if remoteBaseLive}<canvas bind:this={remoteBaseCanvas}></canvas>
+        {:else if !camStream}<canvas bind:this={povCanvas}></canvas>{/if}
+        <!-- Local-webcam picker is meaningless while the robot's own camera is
+             feeding this panel; the frames come from the Pi, not this machine. -->
+        {#if remoteBaseLive || remoteArmLive}
+          <div class="camctl">
+            <button
+              class={activeRemoteCam === REMOTE_BASE_CAM ? "primary" : "subtle"}
+              onclick={() => selectRemoteCamera(REMOTE_BASE_CAM)}
+            >
+              {activeRemoteCam === REMOTE_BASE_CAM ? '● Live' : '○ Switch to Base'}
+            </button>
+          </div>
+        {:else if !remoteBaseLive}
+          <div class="camctl">
+            <select bind:value={camDeviceId} aria-label="base camera device">
+              <option value="">default</option>
+              {#each videoDevices as d, i (d.deviceId)}
+                <option value={d.deviceId}>{d.label || `camera ${i + 1}`}</option>
+              {/each}
+            </select>
+            {#if camStream}
+              <button onclick={reconnectBaseCamera}>Refresh</button>
+              <button onclick={disconnectBaseCamera}>Off</button>
+            {:else}
+              <button class="primary" onclick={reconnectBaseCamera}>Connect</button>
+            {/if}
+          </div>
+        {/if}
       </div>
       <div class="cell">
-        <span class="celllabel">Arm cam{armCamStream ? '' : ' (sim)'}</span>
+        <span class="celllabel">
+          Arm cam{remoteArmLive ? ' (robot)' : armCamStream ? '' : ' (sim)'}
+        </span>
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video bind:this={armPreview} playsinline muted class:hidden={!armCamStream}></video>
-        {#if !armCamStream}<canvas bind:this={armPovCanvas}></canvas>{/if}
-        <div class="camctl">
-          <select bind:value={armCamDeviceId} aria-label="arm camera device">
-            {#each videoDevices as d, i (d.deviceId)}
-              <option value={d.deviceId}>{d.label || `camera ${i + 1}`}</option>
-            {/each}
-          </select>
-          {#if armCamStream}
-            <button onclick={reconnectArmCamera}>Refresh</button>
-            <button onclick={disconnectArmCamera}>Off</button>
-          {:else}
-            <button class="primary" onclick={connectArmCamera}>Connect</button>
-          {/if}
-        </div>
+        <video
+          bind:this={armPreview}
+          playsinline
+          muted
+          class:hidden={!armCamStream || remoteArmLive}
+        ></video>
+        {#if remoteArmLive}<canvas bind:this={remoteArmCanvas}></canvas>
+        {:else if !armCamStream}<canvas bind:this={armPovCanvas}></canvas>{/if}
+        {#if remoteBaseLive || remoteArmLive}
+          <div class="camctl">
+            <button
+              class={activeRemoteCam === REMOTE_ARM_CAM ? "primary" : "subtle"}
+              onclick={() => selectRemoteCamera(REMOTE_ARM_CAM)}
+            >
+              {activeRemoteCam === REMOTE_ARM_CAM ? '● Live' : '○ Switch to Arm'}
+            </button>
+          </div>
+        {:else if !remoteArmLive}
+          <div class="camctl">
+            <select bind:value={armCamDeviceId} aria-label="arm camera device">
+              {#each videoDevices as d, i (d.deviceId)}
+                <option value={d.deviceId}>{d.label || `camera ${i + 1}`}</option>
+              {/each}
+            </select>
+            {#if armCamStream}
+              <button onclick={reconnectArmCamera}>Refresh</button>
+              <button onclick={disconnectArmCamera}>Off</button>
+            {:else}
+              <button class="primary" onclick={connectArmCamera}>Connect</button>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
-    {#if hasBase}
-      <div class="joyoverlay">
-        <DriveTriad onmove={setDrive} />
-        <RotationControl onrotate={turnRobot} />
-      </div>
-    {/if}
     {#if !ready && !errorMsg}<LoadingScreen message={status} />{/if}
     {#if errorMsg}<div class="overlay err">{errorMsg}</div>{/if}
   </div>
 
   <div class="panel">
+    <div class="sidebrand">
+      <h1>Instant Robot</h1>
+      <p class="subtitle">SO-101 simulator &amp; control</p>
+    </div>
+
+    <div class="topactions">
+      <div class="btngroup">
+        <button
+          class="btngroup-btn"
+          class:active={armLink.connected}
+          disabled={armLink.busy || (!armLink.connectLocal && !armLink.connectRemote)}
+          onclick={() => armLink.toggle()}
+          title={armLink.error ?? 'Connect to the servo bus — local (WebSerial) or remote (WebRTC)'}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 22v-5" />
+            <path d="M9 8V2" />
+            <path d="M15 8V2" />
+            <path d="M18 8v5a6 6 0 0 1-12 0V8z" />
+          </svg>
+          <span>{armLink.busy ? 'Connecting…' : armLink.connected ? 'Disconnect robot' : 'Connect robot'}</span>
+        </button>
+        <button
+          class="btngroup-btn"
+          onclick={() => onOpenCalibrate?.()}
+          title="Calibrate camera and joints"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="21" x2="14" y1="4" y2="4" />
+            <line x1="10" x2="3" y1="4" y2="4" />
+            <line x1="21" x2="12" y1="12" y2="12" />
+            <line x1="8" x2="3" y1="12" y2="12" />
+            <line x1="21" x2="16" y1="20" y2="20" />
+            <line x1="12" x2="3" y1="20" y2="20" />
+            <line x1="14" x2="14" y1="2" y2="6" />
+            <line x1="8" x2="8" y1="10" y2="14" />
+            <line x1="16" x2="16" y1="18" y2="22" />
+          </svg>
+          <span>Calibrate</span>
+        </button>
+        <button
+          class="btngroup-btn icon-only"
+          onclick={() => (settings.open = true)}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
     {#if copyMsg}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="status ok" onclick={() => (copyMsg = null)}>{copyMsg}</div>
     {/if}
-    {#if !manualArm}
-      <button class="subtle" onclick={() => (manualArm = true)}>Advanced controls</button>
-    {/if}
-    {#if mode === 'sim' && physics}
-      <button class="subtle" disabled={armPickBusy} onclick={randomiseBlock}>
-        Randomise block
-      </button>
-    {/if}
-    <button class="subtle" disabled={!hasBase || runningAll} onclick={runEverything}>
-      {runningAll ? 'Running…' : 'Run everything'}
-    </button>
-    <!-- Explore: sweep the surroundings and remember every nav tag seen, so the
-         places worth going to become buttons rather than numbers to type in. -->
-    <div class="controls">
-      <button
-        class="primary big"
-        disabled={!hasBase || runningAll || exploring || navigating}
-        onclick={explore}
-      >
-        {exploring ? `Exploring… ${Math.round(exploreProgress * 100)}%` : 'Explore'}
-      </button>
-      {#if exploring}
-        <button onclick={() => (exploreCancel = true)}>Stop</button>
+    <div class="toplinks">
+      {#if !manualArm}
+        <button class="subtle adv-btn" onclick={() => (manualArm = true)}>Advanced controls</button>
+      {:else}
+        <button class="subtle adv-btn" onclick={() => (manualArm = false)}>Hide advanced controls</button>
       {/if}
+      <span class="sep" aria-hidden="true">·</span>
+      <button
+        class="subtle log-btn"
+        onclick={() => (logOpen = !logOpen)}
+        title="View robot log"
+      >
+        Log {pickLog.length ? `(${pickLog.length})` : ''}
+      </button>
       {#if knownTags.size}
-        <button onclick={forgetTags} title="clear remembered places">Forget places</button>
+        <span class="sep" aria-hidden="true">·</span>
+        <button
+          class="subtle forget-btn"
+          onclick={forgetTags}
+          title="Clear remembered places and re-explore"
+        >
+          Forget places
+        </button>
       {/if}
     </div>
-    {#if !knownTags.size && hasBase && !exploring}
-      <!-- Only while there is genuinely nothing to act on: the panel below is
-           empty at that point, and an empty panel doesn't say what to do next. -->
-      <div class="nudgehint">
-        <svg viewBox="0 0 44 34" aria-hidden="true">
-          <path d="M38 30 C 24 31, 28 12, 9 6" fill="none" stroke="currentColor"
-                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M9 6 l 9 1 M9 6 l 1 9" fill="none" stroke="currentColor"
-                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>explore the environment to know more stuff</span>
+
+    {#if logOpen}
+      <div class="logbox">
+        <div class="logrow">
+          <span class="logtitle">Log ({pickLog.length})</span>
+          <div class="logactions">
+            <button class="logactionbtn" onclick={() => { pickLogBuf = []; pickLog = []; pickLogT0 = 0; }}>Clear</button>
+            <button
+              class="logactionbtn"
+              onclick={() => navigator.clipboard?.writeText(pickLog.join('\n'))}
+              disabled={!pickLog.length}
+            >
+              Copy
+            </button>
+            <button class="logactionbtn close" onclick={() => (logOpen = false)}>✕</button>
+          </div>
+        </div>
+        <pre class="logtext">{pickLog.length ? pickLog.join('\n') : 'nothing yet'}</pre>
       </div>
     {/if}
+    <!-- Explore: sweep the surroundings and remember every nav tag seen, so the
+         places worth going to become buttons rather than numbers to type in.
+         Hidden once exploration is complete. -->
+    {#if !hasExplored && !knownTags.size}
+      <div class="explore-section">
+        <div class="explore-row">
+          <button
+            class="primary big explore-btn"
+            disabled={!hasBase || runningAll || exploring || navigating}
+            onclick={explore}
+          >
+            {exploring ? `Exploring… ${Math.round(exploreProgress * 100)}%` : 'Explore'}
+          </button>
+          {#if exploring}
+            <button onclick={() => (exploreCancel = true)}>Stop</button>
+          {/if}
+        </div>
+        {#if hasBase && !exploring}
+          <p class="explore-hint">explore the environment to discover places &amp; objects</p>
+        {/if}
+      </div>
+    {:else if exploring}
+      <div class="explore-section">
+        <div class="explore-row">
+          <button class="primary big explore-btn" disabled>
+            Exploring… {Math.round(exploreProgress * 100)}%
+          </button>
+          <button onclick={() => (exploreCancel = true)}>Stop</button>
+        </div>
+      </div>
+    {/if}
+
     {#if runStep}
       <div class="status {runningAll ? 'warn' : 'ok'}" data-run-step>{runStep}</div>
     {/if}
 
     {#if knownTags.size}
       <h2>Places</h2>
-      {#each [...knownTags.values()] as t (t.id)}
-        <div class="place">
-          <div class="placerow">
-            <strong>Tag {t.id}</strong>
-            <span class="hint">{placeBearing(t)}</span>
-            <button
-              class:primary={navigating && navTagId === t.id}
-              disabled={!hasBase}
-              onclick={() => driveToTag(t.id)}
-            >
-              {navigating && navTagId === t.id ? 'Going…' : 'Go here'}
-            </button>
-          </div>
-          {#if atTag === t.id}
-            <!-- What to pick comes first: once something is in view that is the
-                 action, and burying it under the controls that found it reads
-                 like the search is still the point. -->
-            {#if armDetectedTags.length}
-              <div class="controls">
-                {#each armDetectedTags as id (id)}
-                  <button class="primary" disabled={armPickBusy} onclick={() => pickUpTag(id)}>
-                    Pick up tag {id}
+      <div class="places-table">
+        {#each [...knownTags.values()] as t (t.id)}
+          <div class="place-row-container">
+            <div class="placerow">
+              <strong class="tag-label">Tag {t.id}</strong>
+              <span class="hint">{placeBearing(t)}</span>
+              <button
+                class="place-btn"
+                class:primary={navigating && navTagId === t.id}
+                disabled={!hasBase}
+                onclick={() => driveToTag(t.id)}
+              >
+                {navigating && navTagId === t.id ? 'Going…' : 'Go here'}
+              </button>
+            </div>
+            {#if atTag === t.id}
+              <!-- What to pick comes first: once something is in view that is the
+                   action, and burying it under the controls that found it reads
+                   like the search is still the point. -->
+              <div class="place-actions">
+                {#if armDetectedTags.length}
+                  <div class="controls">
+                    {#each armDetectedTags as id (id)}
+                      <button class="primary" disabled={armPickBusy} onclick={() => pickUpTag(id)}>
+                        Pick up tag {id}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="controls">
+                  {#if lookingForItems}
+                    <button onclick={() => (lookCancel = true)}>Stop looking</button>
+                  {/if}
+                  <button disabled={!armCamReady || armPickBusy} onclick={() => lookForItems()}>
+                    {armPickBusy ? 'Looking…' : 'Look for items'}
                   </button>
-                {/each}
+                  <!-- Only once something is actually held: there is nothing to put
+                       down or let go of otherwise, and offering it says there is. -->
+                  {#if holdingItem}
+                    <button disabled={armPickBusy || deliverBusy} onclick={putInBasket}>
+                      {deliverBusy ? 'Delivering…' : 'Put in basket'}
+                    </button>
+                    <button disabled={armPickBusy} onclick={() => openGripper()}>Open gripper</button>
+                  {/if}
+                </div>
               </div>
             {/if}
-            <div class="controls">
-              {#if lookingForItems}
-                <button onclick={() => (lookCancel = true)}>Stop looking</button>
-              {/if}
-              <button disabled={!armCamReady || armPickBusy} onclick={() => lookForItems()}>
-                {armPickBusy ? 'Looking…' : 'Look for items'}
-              </button>
-              <!-- Only once something is actually held: there is nothing to put
-                   down or let go of otherwise, and offering it says there is. -->
-              {#if holdingItem}
-                <button disabled={armPickBusy || deliverBusy} onclick={putInBasket}>
-                  {deliverBusy ? 'Delivering…' : 'Put in basket'}
-                </button>
-                <button disabled={armPickBusy} onclick={() => openGripper()}>Open gripper</button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/each}
+          </div>
+        {/each}
+      </div>
       {#if navigating}
         <div class="controls"><button class="primary" onclick={toggleNavigate}>Stop</button></div>
       {/if}
@@ -4413,99 +4741,62 @@
       </div>
     {/if}
 
-    <details class="picklog">
-      <summary>Log ({pickLog.length})</summary>
-      <div class="logrow">
-        <button onclick={() => { pickLogBuf = []; pickLog = []; pickLogT0 = 0; }}>Clear</button>
-        <button
-          onclick={() => navigator.clipboard?.writeText(pickLog.join('\n'))}
-          disabled={!pickLog.length}
-        >
-          Copy
-        </button>
-      </div>
-      <pre class="logtext">{pickLog.length ? pickLog.join('\n') : 'nothing yet'}</pre>
-    </details>
-    <!-- Wherever there's an arm camera — a real one, or the simulated view, which
-         renders the same frames the detector runs on. This used to be real-only,
-         which left the whole pick sequence and every one of its tunables (hover,
-         drop, grasp shift) unreachable in sim: the one place they get tuned. -->
-    {#if armCamReady || mode === 'real'}
-      <div class="realbox">
-        <h2>Pick up an object</h2>
-        {#if mode === 'real' && !armCamStream}
-          <div class="status warn">
-            Arm camera off — connect it under the <strong>Arm cam</strong> view.
-          </div>
-        {:else if armDetectedTags.length}
-          <div class="controls">
-            {#each armDetectedTags as id (id)}
-              <button class="primary" disabled={armPickBusy} onclick={() => pickUpTag(id)}>
-                Pick up tag {id}
-              </button>
-            {/each}
-          </div>
-        {:else}
-          <div class="status warn">No object tag in view — point the arm camera at the board.</div>
-        {/if}
-
-        {#if manualArm}
-        <details bind:open={stepsOpen}>
-          <summary>Step by step &amp; tuning</summary>
-          <div class="pickrow">
-            <label for="apicktag">Tag ID</label>
-            <input id="apicktag" type="number" bind:value={blockTag} />
-            {#each armDetectedTags as id (id)}
-              <button class:primary={blockTag === id} onclick={() => (blockTag = id)}>{id}</button>
-            {/each}
-          </div>
-          <div class="controls">
-            <button disabled={armPickBusy} onclick={raiseToView} title="move to the board-view pose, then release the arm">
-              1 · Raise to view
-            </button>
-            <button disabled={!armCamReady || armPickBusy} onclick={runApproachStep}>
-              2 · Approach
-            </button>
-            <button disabled={armPickBusy} onclick={() => runGraspStep()} title="shift onto the grasp line, descend, close, lift">
-              3 · Grasp & lift
-            </button>
-            <button disabled={!armCamReady || armPickBusy} onclick={runRollStep}>Square ⟳</button>
-            <button disabled={armPickBusy} onclick={runFinalDrop}>Drop</button>
-            <button disabled={armPickBusy} onclick={runCloseGripper}>Grip</button>
-            <button disabled={armPickBusy} onclick={runLift}>Lift</button>
-            <button disabled={armPickBusy} onclick={() => openGripper()}>Open gripper</button>
-          </div>
-          <div class="pickrow">
-            <label for="gripacross" title="line the jaws up with the tag's other axis — pick whichever closes across the object's short side">
-              Grip across the tag
-            </label>
-            <input id="gripacross" type="checkbox" bind:checked={gripAcrossTag} />
-            <span class="val"></span>
-          </div>
-          <div class="pickrow">
-            <label for="hoverm" title="how far above the tag the gripper parks, along the tag's normal">
-              Hover above tag (m)
-            </label>
-            <input id="hoverm" type="number" step="0.005" bind:value={hoverM} />
-            <span class="val">m</span>
-          </div>
-          <div class="pickrow">
-            <label for="graspleft" title="sideways shift onto the grasp line before descending; positive moves toward the static jaw">
-              Grasp shift (m)
-            </label>
-            <input id="graspleft" type="number" step="0.002" bind:value={graspLeftM} />
-            <span class="val">m</span>
-          </div>
-          <div class="pickrow">
-            <label for="finaldrop" title="how far the grasp step descends along the approach axis">Drop (m)</label>
-            <input id="finaldrop" type="number" step="0.002" bind:value={finalDropM} />
-            <label for="liftby" title="how far to lift once gripped">Lift (m)</label>
-            <input id="liftby" type="number" step="0.01" bind:value={liftM} />
-          </div>
-        </details>
-        {/if}
-        {#if armPickMsg}<div class="status {armPickBusy ? 'warn' : 'ok'}">{armPickMsg}</div>{/if}
-      </div>
+    {#if manualArm}
+      <details bind:open={stepsOpen}>
+        <summary>Step by step &amp; tuning</summary>
+        <div class="pickrow">
+          <label for="apicktag">Tag ID</label>
+          <input id="apicktag" type="number" bind:value={blockTag} />
+          {#each armDetectedTags as id (id)}
+            <button class:primary={blockTag === id} onclick={() => (blockTag = id)}>{id}</button>
+          {/each}
+        </div>
+        <div class="controls">
+          <button disabled={armPickBusy} onclick={raiseToView} title="move to the board-view pose, then release the arm">
+            1 · Raise to view
+          </button>
+          <button disabled={!armCamReady || armPickBusy} onclick={runApproachStep}>
+            2 · Approach
+          </button>
+          <button disabled={armPickBusy} onclick={() => runGraspStep()} title="shift onto the grasp line, descend, close, lift">
+            3 · Grasp & lift
+          </button>
+          <button disabled={!armCamReady || armPickBusy} onclick={runRollStep}>Square ⟳</button>
+          <button disabled={armPickBusy} onclick={runFinalDrop}>Drop</button>
+          <button disabled={armPickBusy} onclick={runCloseGripper}>Grip</button>
+          <button disabled={armPickBusy} onclick={runLift}>Lift</button>
+          <button disabled={armPickBusy} onclick={() => openGripper()}>Open gripper</button>
+        </div>
+        <div class="pickrow">
+          <label for="gripacross" title="line the jaws up with the tag's other axis — pick whichever closes across the object's short side">
+            Grip across the tag
+          </label>
+          <input id="gripacross" type="checkbox" bind:checked={gripAcrossTag} />
+          <span class="val"></span>
+        </div>
+        <div class="pickrow">
+          <label for="hoverm" title="how far above the tag the gripper parks, along the tag's normal">
+            Hover above tag (m)
+          </label>
+          <input id="hoverm" type="number" step="0.005" bind:value={hoverM} />
+          <span class="val">m</span>
+        </div>
+        <div class="pickrow">
+          <label for="graspleft" title="sideways shift onto the grasp line before descending; positive moves toward the static jaw">
+            Grasp shift (m)
+          </label>
+          <input id="graspleft" type="number" step="0.002" bind:value={graspLeftM} />
+          <span class="val">m</span>
+        </div>
+        <div class="pickrow">
+          <label for="finaldrop" title="how far the grasp step descends along the approach axis">Drop (m)</label>
+          <input id="finaldrop" type="number" step="0.002" bind:value={finalDropM} />
+          <label for="liftby" title="how far to lift once gripped">Lift (m)</label>
+          <input id="liftby" type="number" step="0.01" bind:value={liftM} />
+        </div>
+      </details>
+      {#if armPickMsg}<div class="status {armPickBusy ? 'warn' : 'ok'}">{armPickMsg}</div>{/if}
+    {/if}
 
       {#if manualArm && mode === 'real'}
       <div class="realbox">
@@ -4657,7 +4948,6 @@
         {#if detectMsg}<div class="status bad">{detectMsg}</div>{/if}
       </div>
       {/if}
-    {/if}
 
     {#if hasBase && knownTags.size}
       <details class="realbox" bind:open={shelfOpen}>
@@ -4708,6 +4998,10 @@
         </div>
       </details>
     {/if}
+    {#if (hasExplored || knownTags.size > 0) && !exploring}
+      <!-- Gemini Voice & Text AI Assistant (placed cleanly at the bottom) -->
+      <AiChat context={aiContext} callbacks={aiCallbacks} />
+    {/if}
   </div>
 </div>
 
@@ -4722,33 +5016,66 @@
   }
   .sim {
     display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 1.25rem;
-    align-items: start;
+    grid-template-columns: minmax(0, 3fr) minmax(320px, 1fr);
+    gap: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    align-items: stretch;
   }
-  @media (max-width: 980px) {
+  @media (max-width: 1080px) {
     .sim {
       grid-template-columns: 1fr;
+      height: auto;
+      overflow-y: auto;
     }
+  }
+  .sidebrand {
+    margin-bottom: 0.25rem;
+  }
+  .sidebrand h1 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    margin: 0 0 0.15rem;
+    letter-spacing: -0.01em;
+  }
+  .sidebrand .subtitle {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    color: var(--muted, #6b7280);
   }
   .viewer {
     position: relative;
     width: 100%;
-    aspect-ratio: 4 / 3;
-    min-height: 22rem;
-    border: 1px solid var(--line-soft);
-    border-radius: 8px;
+    height: 100vh;
+    min-height: 100vh;
+    border: none;
+    border-right: 1px solid var(--line-soft);
+    border-radius: 0;
     overflow: hidden;
   }
-  .joyoverlay {
-    position: absolute;
-    left: 0.6rem;
-    bottom: 0.6rem;
-    z-index: 5;
-    opacity: 0.92;
+  @media (max-width: 1080px) {
+    .viewer {
+      height: 60vh;
+      min-height: 24rem;
+      border-right: none;
+      border-bottom: 1px solid var(--line-soft);
+    }
+  }
+  .panel {
+    height: 100vh;
+    overflow-y: auto;
+    padding: 1rem 1.25rem 3rem;
+    box-sizing: border-box;
     display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  @media (max-width: 1080px) {
+    .panel {
+      height: auto;
+      overflow-y: visible;
+    }
   }
   .joyoverlay {
     position: absolute;
@@ -4760,14 +5087,13 @@
     gap: 0.5rem;
     align-items: flex-start;
   }
-  /* Four live views at once — sim, tags and both cameras — so nothing is hidden
-     behind a tab while the robot is moving. */
-  .grid4 {
+  /* Layout: Large main 3D world view spanning top row, 3 subviews (2D map, base cam, arm cam) on bottom row */
+  .gridmain {
     position: absolute;
     inset: 0;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: 2.2fr 1fr;
     gap: 2px;
     background: var(--line, #333);
   }
@@ -4776,6 +5102,9 @@
     overflow: hidden;
     background: #0e1013;
     display: flex;
+  }
+  .cell.main {
+    grid-column: 1 / -1;
   }
   .cell video.hidden { display: none; }
   .cell canvas,
@@ -4846,53 +5175,219 @@
     /* Overlay controls: compact, not the standard 2.25rem button height. */
     min-height: 0;
   }
-  .picklog summary {
-    font-size: 0.8rem;
+  .toplinks {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    width: 100%;
+    margin-top: 0.25rem;
+    margin-bottom: 0.65rem;
+  }
+  .toplinks button.subtle {
+    font-size: 0.75rem;
+    color: var(--muted);
+    padding: 0.15rem 0.35rem;
+    min-height: 0;
+    line-height: 1.2;
+    border-radius: 4px;
+    background: transparent;
+    border: none;
     cursor: pointer;
-    margin-top: 0.5rem;
+  }
+  .toplinks button.subtle:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .toplinks .sep {
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1;
+    opacity: 0.65;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .logbox {
+    margin-bottom: 0.75rem;
+    background: var(--surface-2, #f9fafb);
+    border: 1px solid var(--line-soft, #d1d5db);
+    border-radius: 6px;
+    padding: 0.5rem;
   }
   .logrow {
     display: flex;
-    gap: 0.35rem;
-    margin: 0.35rem 0;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.35rem;
+  }
+  .logtitle {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .logactions {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .logactionbtn {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.45rem;
+    min-height: 0;
+    border-radius: 4px;
+    border: 1px solid var(--line-soft, #d1d5db);
+    background: var(--surface, #ffffff);
+    cursor: pointer;
+  }
+  .logactionbtn:hover {
+    background: var(--surface-2, #f3f4f6);
+  }
+  .logactionbtn.close {
+    padding: 0.15rem 0.4rem;
   }
   .logtext {
-    max-height: 14rem;
+    max-height: 12rem;
     overflow: auto;
     margin: 0;
-    padding: 0.5rem;
-    background: var(--surface-2, #f9fafb);
+    padding: 0.4rem;
+    background: var(--surface, #ffffff);
     border: 1px solid var(--line-soft, #d1d5db);
-    border-radius: 0.375rem;
+    border-radius: 4px;
     font-size: 0.7rem;
     line-height: 1.4;
     white-space: pre;
   }
-  .place {
-    border: 1px solid var(--line, #8884);
+  .explore-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1.85rem;
+    margin-bottom: 1.25rem;
+    width: 100%;
+    text-align: center;
+  }
+  .explore-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+  }
+  .explore-btn {
+    position: relative;
+    z-index: 1;
+    min-height: 2.35rem;
+    padding: 0.5rem 1.6rem;
+    font-size: 0.92rem;
+    font-weight: 600;
+    border-radius: 6px;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .explore-btn::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
     border-radius: 8px;
-    padding: 0.45rem 0.6rem;
-    margin-bottom: 0.4rem;
+    background: linear-gradient(
+      90deg,
+      #3b82f6,
+      #8b5cf6,
+      #ec4899,
+      #f59e0b,
+      #10b981,
+      #06b6d4,
+      #3b82f6
+    );
+    background-size: 300% 100%;
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  .explore-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
+  }
+  .explore-btn:hover:not(:disabled)::before {
+    opacity: 1;
+    animation: explore-border-flow 2s linear infinite;
+  }
+  @keyframes explore-border-flow {
+    0% {
+      background-position: 0% 50%;
+    }
+    100% {
+      background-position: 300% 50%;
+    }
+  }
+  .explore-hint {
+    margin: 0.65rem 0 0 0;
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.4;
+    text-align: center;
+    max-width: 18rem;
+  }
+  .places-table {
+    border: 1px solid var(--line-soft, #d1d5db);
+    border-radius: 6px;
+    background: var(--surface, #ffffff);
+    overflow: hidden;
+    margin-bottom: 0.6rem;
+  }
+  .place-row-container {
+    border-bottom: 1px solid var(--line-soft, #e5e7eb);
+  }
+  .place-row-container:last-child {
+    border-bottom: none;
   }
   .placerow {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    padding: 0.35rem 0.6rem;
   }
-  .placerow strong { min-width: 4.5rem; }
-  .placerow .hint { flex: 1; margin: 0; }
+  .placerow strong.tag-label {
+    min-width: 4.2rem;
+    font-size: 0.8rem;
+  }
+  .placerow .hint {
+    flex: 1;
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--muted, #6b7280);
+  }
+  .place-btn {
+    min-height: 1.75rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.75rem;
+  }
+  .place-actions {
+    padding: 0.4rem 0.6rem;
+    background: var(--surface-2, #f9fafb);
+    border-top: 1px dashed var(--line-soft, #e5e7eb);
+  }
   /* Present but easy to skip past — most sessions never need the arm controls. */
   .subtle {
     border: none;
     background: none;
-    color: inherit;
-    opacity: 0.5;
-    font-size: 0.75rem;
-    padding: 0 0 0.5rem;
+    color: var(--muted, #6b7280);
+    opacity: 0.85;
+    font-size: 0.8rem;
+    padding: 0.15rem 0;
     cursor: pointer;
-    text-decoration: underline;
+    text-decoration: none;
+    text-align: left;
+    display: inline-block;
+    transition: opacity 0.15s ease, color 0.15s ease;
   }
-  .subtle:hover { opacity: 0.85; }
+  .subtle:hover {
+    opacity: 1;
+    color: var(--ink);
+    text-decoration: none;
+  }
   .sumhead {
     font-weight: 600;
     font-size: 0.95rem;

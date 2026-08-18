@@ -1,10 +1,25 @@
 {
-  // Static-assets-only Worker (no server code) — serves the built Vite app.
+  // Serves the built Vite app, plus a thin Worker for WebRTC signalling
+  // ("remote connection" mode — see worker/index.ts). The static site is
+  // untouched; only /signal/* and /budget-status hit server code.
   "name": "instant-robot",
   "compatibility_date": "2025-01-01",
+  "main": "./worker/index.ts",
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "binding": "ASSETS"
   },
+  "durable_objects": {
+    "bindings": [
+      { "name": "SIGNAL_ROOM", "class_name": "SignalRoom" },
+      { "name": "BUDGET", "class_name": "Budget" }
+    ]
+  },
+  // SQLite-backed DO storage (the free-plan-compatible kind) — both classes are
+  // new as of this migration, so a single `new_sqlite_classes` tag covers them.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SignalRoom", "Budget"] }
+  ],
   // Attaches the custom domain on production `wrangler deploy` (river.berlin must
   // be on this Cloudflare account — it is). Preview deploys ignore this.
   "routes": [
