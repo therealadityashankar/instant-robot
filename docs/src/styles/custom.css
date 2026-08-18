@@ -1,0 +1,27 @@
+/* Custom styling for Instant Robot Documentation */
+:root {
+  --sl-color-accent-low: #064e3b;
+  --sl-color-accent: #10b981;
+  --sl-color-accent-high: #a7f3d0;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d1fae5;
+  --sl-color-accent: #059669;
+  --sl-color-accent-high: #064e3b;
+}
+
+/* Tag generator print styles */
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  nav, header, aside, .sl-sidebar, .sl-header, .action-buttons, footer {
+    display: none !important;
+  }
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}

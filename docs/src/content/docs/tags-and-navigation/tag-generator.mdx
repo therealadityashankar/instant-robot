@@ -1,0 +1,36 @@
+---
+title: Printable Tag Generator
+description: Interactive in-browser generator for custom ArUco 6×6 fiducials and labeled navigation station cards.
+---
+
+import InteractiveTagGenerator from '../../../components/InteractiveTagGenerator.svelte';
+
+Instant Robot uses **6×6 ArUco fiducials** (`DICT_6X6_250`) to locate objects, align the robot gripper, and navigate between stationary charging and pickup points.
+
+Use the tool below to generate, customize, and print your tags directly from your browser.
+
+---
+
+<InteractiveTagGenerator client:load />
+
+---
+
+## Tag Categories & Placement Rules
+
+### 1. Navigation Station Cards (Tags 200 & 201)
+- **Pair Structure**: Contains Marker 200 on the left and Marker 201 on the right, with a clear human-readable title and AI context description between them.
+- **Placement**: Stick onto the vertical front face of docking stations, tables, or storage shelves at approximately **5–10 cm above floor level** so the base camera has a direct line of sight.
+- **Why Two Markers?**: The dual-marker pair provides exact scale, distance, and heading angle to square the robot directly in front of the target.
+
+### 2. Moveable Object / Prop Tags (Tags 1 – 199)
+- **Placement**: Attach directly to the top or side of objects to pick up (apples, blocks, tools, cups).
+- **Orientation**: Align the top arrow pointing towards the front/top of the object. When the arm camera observes the tag, the analytical IK solver automatically aligns the gripper jaws to grasp along the approach axis.
+
+---
+
+## Printing Guidelines
+
+:::caution[Important Print Instructions]
+1. **Disable "Fit to Page"**: Always print at **100% actual scale**. Scaling down the tag changes the physical marker dimension ($L$), which causes calculated distance measurements from `solvePnP` to be proportionally off.
+2. **Preserve the Quiet Zone**: Do not cut inside the black border. The vision detector requires the white quiet zone around the outer black frame to recognize square contours.
+:::

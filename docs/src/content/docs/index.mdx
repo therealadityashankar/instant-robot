@@ -1,0 +1,40 @@
+---
+title: Instant Robot
+description: Zero-install browser robotics, physics simulation, and autonomous visual navigation for LeKiwi & SO-100.
+template: splash
+hero:
+  tagline: Zero-install in-browser simulation, IK solver, dual-camera WebRTC streaming, and visual fiducial navigation.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Quickstart Guide
+      link: /instant-robot/getting-started/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: 🏷️ Interactive Tag Generator
+      link: /instant-robot/tags-and-navigation/tag-generator/
+      icon: document
+      variant: secondary
+    - text: Open Simulator App
+      link: https://instant.river.berlin
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Core Capabilities
+
+<CardGrid stagger>
+  <Card title="⚡ Zero-Install Web Simulator" icon="laptop">
+    Runs full MuJoCo physics, analytical inverse kinematics, and Three.js 3D rendering directly in your browser.
+  </Card>
+  <Card title="🏷️ Visual Servoing & Auto-Navigation" icon="rocket">
+    Dock, navigate between stations, and manipulate objects using 6×6 ArUco fiducials and camera homography.
+  </Card>
+  <Card title="📡 WebRTC Zero-Lag Teleoperation" icon="signal">
+    Stream low-latency dual-camera feeds (Base & Arm) and bidirectional servo bus commands over WebRTC.
+  </Card>
+  <Card title="🖨️ Printable Tag Customizer" icon="setting">
+    Generate custom labeled fiducials and station cards right in your browser with 1-click printing and export.
+  </Card>
+</CardGrid>
