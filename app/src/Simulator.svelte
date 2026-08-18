@@ -5029,7 +5029,7 @@
       {/if}
       <span class="sep" aria-hidden="true">·</span>
       <a
-        href="/docs/"
+        href={import.meta.env.DEV ? 'http://localhost:4321/docs/' : '/docs/'}
         target="_blank"
         rel="noopener noreferrer"
         class="subtle"
