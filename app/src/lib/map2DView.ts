@@ -214,13 +214,13 @@ export class Map2DView {
     }
   }
 
-  setPlaces(places: Array<{ id: number; p: [number, number, number]; faceYaw?: number }>) {
+  setPlaces(places: Array<{ id: number; p: [number, number, number]; faceYaw?: number; label?: string; description?: string }>) {
     this.places = places.map((p) => {
       const def = STATIONS.find((s) => s.navTag === p.id);
       return {
         ...p,
         prop: def?.prop,
-        label: def ? PROP_NAMES[def.prop] || `Tag ${p.id}` : `Tag ${p.id}`,
+        label: p.label || (def ? def.label || PROP_NAMES[def.prop] || `Tag ${p.id}` : `Tag ${p.id}`),
       };
     });
   }

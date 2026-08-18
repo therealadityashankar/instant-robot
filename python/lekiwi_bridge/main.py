@@ -5,12 +5,15 @@ until interrupted. `lekiwi-bridge` on the path after `pip install -e .`.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
+import pathlib
 import subprocess
+import time
 
 from .bus import ServoBus
-from .camera import Camera
+from .camera import Camera, default_camera_paths
 from .config import Config
 from .protocol import (
     MAX_VIDEO_FRAME,
@@ -45,20 +48,45 @@ def _disable_wifi_power_save() -> None:
 
 
 class CameraManager:
-    def __init__(self, cameras: list[Camera]):
-        self.cameras = cameras
+    def __init__(self, fps: int = 5):
+        self.fps = fps
+        self.cameras: list[Camera] = []
         self.active_index = 0
+        self.virtual_index = 0
         self.changed = asyncio.Event()
+        self.rescan()
+
+    def rescan(self) -> list[Camera]:
+        paths = default_camera_paths()
+        existing_paths = [c.path for c in self.cameras]
+        if paths != existing_paths or not self.cameras:
+            log.info("rescan found cameras: %s (was %s)", paths, existing_paths)
+            for c in self.cameras:
+                if c.path not in paths:
+                    c.close()
+            self.cameras = [Camera(path, i, fps=self.fps) for i, path in enumerate(paths)]
+            if self.active_index >= len(self.cameras):
+                self.active_index = max(0, len(self.cameras) - 1)
+        return self.cameras
 
     def set_active(self, index: int) -> int:
-        if 0 <= index < len(self.cameras):
-            if index != self.active_index:
+        self.rescan()
+        self.virtual_index = index
+        if len(self.cameras) > 1:
+            target_idx = min(index, len(self.cameras) - 1)
+            if target_idx != self.active_index:
                 if self.active_index < len(self.cameras):
                     self.cameras[self.active_index].close()
-                self.active_index = index
+                self.active_index = target_idx
                 self.changed.set()
-                log.info("active camera switched to %d", index)
-        return self.active_index
+                log.info("active camera switched to hardware %d (virtual %d)", target_idx, index)
+        elif len(self.cameras) == 1:
+            self.active_index = 0
+            self.changed.set()
+            log.info("camera feed routed to virtual camera %d using physical camera %s", index, self.cameras[0].path)
+        else:
+            log.warning("no camera hardware found on rescan")
+        return self.virtual_index
 
 
 async def handle_rpc(
@@ -73,7 +101,7 @@ async def handle_rpc(
     rid = msg["id"]
     try:
         if op == "hello":
-            return rpc_ok(rid, {"version": PROTOCOL_VERSION, "servos": servos, "cameras": len(cam_mgr.cameras)})
+            return rpc_ok(rid, {"version": PROTOCOL_VERSION, "servos": servos, "cameras": max(1, len(cam_mgr.cameras))})
         if op == "ping":
             return rpc_ok(rid, "pong")
         if op == "readPosition":
@@ -93,7 +121,7 @@ async def handle_rpc(
             return rpc_ok(rid)
         if op == "setActiveCamera":
             idx = cam_mgr.set_active(int(args.get("camera", 0)))
-            return rpc_ok(rid, {"activeCamera": idx})
+            return rpc_ok(rid, {"activeCamera": idx, "hardwareCameras": len(cam_mgr.cameras)})
         return rpc_err(rid, f"unknown op {op!r}")
     except Exception as e:  # noqa: BLE001 - reported to the caller, not swallowed
         return rpc_err(rid, str(e))
@@ -117,41 +145,28 @@ async def run_async() -> None:
     watchdog = Watchdog(bus, cfg.wheel_ids, cfg.watchdog_s)
     watchdog.start()
 
-    cameras = []
-    for i, path in enumerate(cfg.camera_paths):
-        cam = Camera(path, i)
-        try:
-            cam.open()
-            cam.close()
-            cameras.append(cam)
-            log.info("camera %d probed ok: %s", i, path)
-        except Exception as e:
-            log.warning("camera %s failed to open: %s", path, e)
-    cam_mgr = CameraManager(cameras)
+    cam_mgr = CameraManager(fps=cfg.camera_fps)
+    for i, c in enumerate(cam_mgr.cameras):
+        log.info("camera %d probed ok: %s", i, c.path)
 
     peer: Peer | None = None
 
     def on_rpc_open(channel):
         @channel.on("message")
-        def on_message(message):
+        async def on_msg(raw):
             try:
-                msg = json.loads(message)
-            except Exception:
+                msg = json.loads(raw)
+            except Exception as e:
+                log.warning("bad rpc message: %s", e)
                 return
-            asyncio.ensure_future(_reply(channel, bus, cfg, servos, cam_mgr, msg))
-
-        async def _reply(channel, bus, cfg, servos, cam_mgr, msg):
             reply = await handle_rpc(bus, cfg, servos, cam_mgr, msg)
-            try:
-                channel.send(json.dumps(reply))
-            except Exception:
-                pass
+            channel.send(json.dumps(reply))
 
     def on_stream_open(channel):
         @channel.on("message")
-        def on_message(message):
+        def on_msg(raw):
             try:
-                msg = json.loads(message)
+                msg = json.loads(raw)
             except Exception:
                 return
             watchdog.kick()
@@ -166,39 +181,53 @@ async def run_async() -> None:
     cam_tasks: list[asyncio.Task] = []
 
     def on_video_open(channel):
-        log.info("video channel open, streaming single active camera (%d total available)", len(cameras))
+        log.info("video channel open, streaming active camera (%d hardware cameras)", len(cam_mgr.cameras))
         cam_tasks.append(asyncio.ensure_future(_stream_camera(channel, cam_mgr)))
 
     async def _stream_camera(channel, cam_mgr: CameraManager):
         seq = 0
         sent = 0
         while channel.readyState == "open":
+            if not cam_mgr.cameras:
+                cam_mgr.rescan()
+                if not cam_mgr.cameras:
+                    await asyncio.sleep(0.5)
+                    continue
             idx = cam_mgr.active_index
             if not (0 <= idx < len(cam_mgr.cameras)):
-                await asyncio.sleep(0.2)
-                continue
+                idx = 0
             cam = cam_mgr.cameras[idx]
             cam_mgr.changed.clear()
+            virt_idx = getattr(cam_mgr, "virtual_index", idx)
             try:
                 async for jpeg in cam.frames():
                     if channel.readyState != "open" or cam_mgr.changed.is_set():
                         break
+
                     if len(jpeg) > MAX_VIDEO_FRAME:
                         log.warning(
-                            "camera %d: frame too large (%d bytes), dropping", cam.index, len(jpeg)
+                            "camera %d: frame too large (%d bytes > %d), dropping", virt_idx, len(jpeg), MAX_VIDEO_FRAME
                         )
                         continue
-                    if getattr(channel, "bufferedAmount", 0) > 4 * MAX_VIDEO_FRAME:
+
+                    # Backpressure: never let the SCTP send queue swell
+                    buf_amt = getattr(channel, "bufferedAmount", 0)
+                    if buf_amt > 65536:
+                        log.debug("video channel backpressure (buffered %d B), dropping frame cam=%d", buf_amt, virt_idx)
                         continue
-                    channel.send(encode_video_frame(cam.index, seq, jpeg))
-                    seq += 1
-                    sent += 1
-                    if sent in (1, 50) or sent % 250 == 0:
-                        log.info("camera %d: %d frames sent", cam.index, sent)
+
+                    try:
+                        channel.send(encode_video_frame(virt_idx, seq, jpeg))
+                        seq += 1
+                        sent += 1
+                        if sent == 1 or sent % 10 == 0:
+                            log.info("Tx frame: cam=%d (hw=%d) seq=%d size=%d B (buffered=%d)", virt_idx, idx, seq - 1, len(jpeg), buf_amt)
+                    except Exception as e:
+                        log.error("channel.send failed on cam %d seq %d: %s", virt_idx, seq, e)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.warning("camera %d stream error: %s (retrying in 0.5s)", cam.index, e)
+                log.warning("camera %d stream error: %s (retrying in 0.5s)", idx, e)
                 await asyncio.sleep(0.5)
 
     try:

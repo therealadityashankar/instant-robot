@@ -56,7 +56,7 @@ def rpc_err(id: int, error: str) -> dict[str, Any]:
 # ── video ──────────────────────────────────────────────────────────────────
 
 VIDEO_HEADER_BYTES = 5
-MAX_VIDEO_FRAME = 60_000
+MAX_VIDEO_FRAME = 250_000
 
 
 def encode_video_frame(camera: int, seq: int, jpeg: bytes) -> bytes:

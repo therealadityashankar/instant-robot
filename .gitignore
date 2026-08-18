@@ -1,6 +1,7 @@
 CLAUDE.md
 .DS_Store
 .venv*
+node_modules/
 wait_and_train.sh
 **/*.mp4
 !real_t1_run.mp4

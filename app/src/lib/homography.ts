@@ -16,36 +16,40 @@ export interface Detector {
 export function createDetector(cv: Cv): Detector {
   const dictionary = cv.getPredefinedDictionary(cv.DICT_6X6_250);
   const params = new cv.aruco_DetectorParameters();
-  // Slightly more aggressive detection (matches ARUCO_PARAMS in Python).
   params.adaptiveThreshWinSizeMin = 3;
-  params.adaptiveThreshWinSizeMax = 53;
-  params.adaptiveThreshWinSizeStep = 4;
-  params.errorCorrectionRate = 0.7;
+  params.adaptiveThreshWinSizeMax = 33;
+  params.adaptiveThreshWinSizeStep = 6;
+  params.errorCorrectionRate = 0.6; // Standard reliable threshold to prevent false positives
   const refine = new cv.aruco_RefineParameters(10, 3, true);
   const detector = new cv.aruco_ArucoDetector(dictionary, params, refine);
   return { detector, dictionary, params };
 }
 
-/** Detect markers in a grayscale Mat. Returns {tagId -> corners [TL,TR,BR,BL]}. */
-export function detectMarkers(
+export interface MarkerDetection {
+  id: number;
+  corners: Corners;
+}
+
+/** Detect all markers in a grayscale Mat as a list (preserving multiple instances of the same ID). */
+export function detectAllMarkers(
   cv: Cv,
   det: Detector,
   gray: any,
-): Map<number, Corners> {
+): MarkerDetection[] {
   const cornersVec = new cv.MatVector();
   const ids = new cv.Mat();
   const rejected = new cv.MatVector();
-  const out = new Map<number, Corners>();
+  const out: MarkerDetection[] = [];
   try {
     det.detector.detectMarkers(gray, cornersVec, ids, rejected);
-    // Drive off the corner vector's size; ids may be laid out N×1 or 1×N, so
-    // read it from its flat typed array rather than assuming a shape.
     const n = cornersVec.size();
-    const idData: Int32Array | undefined = ids.data32S;
+    const idData = ids.data32S;
     for (let i = 0; i < n; i++) {
       const m = cornersVec.get(i); // 1x4 CV_32FC2
       if (!m) continue;
-      const id = idData ? idData[i] : ids.intAt(i, 0);
+      const id = idData && idData.length > i
+        ? idData[i]
+        : (ids.rows === 1 ? ids.intAt(0, i) : ids.intAt(i, 0));
       const d = m.data32F;
       const corners: Corners = [
         [d[0], d[1]],
@@ -53,7 +57,7 @@ export function detectMarkers(
         [d[4], d[5]],
         [d[6], d[7]],
       ];
-      out.set(id, corners);
+      out.push({ id, corners });
       m.delete();
     }
   } finally {
@@ -62,6 +66,20 @@ export function detectMarkers(
     rejected.delete();
   }
   return out;
+}
+
+/** Detect markers in a grayscale Mat. Returns {tagId -> corners [TL,TR,BR,BL]}. */
+export function detectMarkers(
+  cv: Cv,
+  det: Detector,
+  gray: any,
+): Map<number, Corners> {
+  const all = detectAllMarkers(cv, det, gray);
+  const map = new Map<number, Corners>();
+  for (const item of all) {
+    map.set(item.id, item.corners);
+  }
+  return map;
 }
 
 export interface HomographyResult {

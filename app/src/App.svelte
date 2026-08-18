@@ -44,16 +44,24 @@
   let connectBtnEl: HTMLButtonElement | null = $state(null);
   let connectModalEl: HTMLDivElement | null = $state(null);
   const remoteParsed = $derived.by(() => {
-    const at = remoteCombined.indexOf('@');
-    if (at <= 0 || at === remoteCombined.length - 1) return null;
-    return { room: remoteCombined.slice(0, at).trim(), token: remoteCombined.slice(at + 1).trim() };
+    const parts = remoteCombined.split('@').map((s) => s.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    return {
+      room: parts[0],
+      token: parts[1],
+      customOrigin: parts[2] ? parts[2].replace(/^http/, 'ws').replace(/\/$/, '') : null,
+    };
   });
   function connectRemote() {
     if (!remoteParsed) return;
-    saveRemoteConfig(remoteParsed);
+    saveRemoteConfig({ room: remoteParsed.room, token: remoteParsed.token });
     armLink.pickRemote({ signalOrigin: remoteWsOrigin(), room: remoteParsed.room, token: remoteParsed.token });
   }
   function remoteWsOrigin(): string {
+    if (remoteParsed?.customOrigin) return remoteParsed.customOrigin;
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+      return 'wss://instant.river.berlin';
+    }
     return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
   }
   function closeConnectChooser() {

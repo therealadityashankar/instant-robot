@@ -18,7 +18,7 @@ uv sync
 
 ## Running on the Real Robot
 
-### Step 1, Print the board and block tags
+### Step 1, Print the board, block tags, and nav tags
 
 Print everything in [`printables/`](printables/) — these are committed to the repo,
 so you can print them directly without regenerating:
@@ -26,6 +26,7 @@ so you can print them directly without regenerating:
 - [`printables/aruco_board.pdf`](printables/aruco_board.pdf) — the calibration board
 - [`printables/bordered_tags.pdf`](printables/bordered_tags.pdf) — bordered block tags (IDs 100–150)
 - [`printables/bordered_tags_20mm.pdf`](printables/bordered_tags_20mm.pdf) — 20 mm variant
+- [`printables/nav_tags.pdf`](printables/nav_tags.pdf) — **labeled navigation tags**
 
 **IMPORTANT: do not scale the pages when printing — print at 100% scale**, or the
 tag geometry won't match the calibration.
@@ -33,10 +34,64 @@ tag geometry won't match the calibration.
 To regenerate them from source instead:
 
 ```bash
-uv run python tags-and-borders/make_aruco_board.py   # printables/aruco_board.pdf
-uv run python tags-and-borders/make_jenga_tag.py     # printables/jenga_tag.pdf
-uv run python tags-and-borders/make_bordered_tags.py # printables/bordered_tags.pdf
+uv run python tags-and-borders/make_aruco_board.py     # printables/aruco_board.pdf
+uv run python tags-and-borders/make_jenga_tag.py       # printables/jenga_tag.pdf
+uv run python tags-and-borders/make_bordered_tags.py   # printables/bordered_tags.pdf
+uv run python tags-and-borders/make_labeled_tags.py    # printables/nav_tags.pdf
 ```
+
+#### Creating custom labeled nav tags
+
+Navigation tags identify stations by **printed text**, not by tag number. Each
+card has ArUco markers **200** (left) and **201** (right) flanking a text region
+with a **label** on top and a **description** below:
+
+```
+┌──────────┬────────────────────┬──────────┐
+│          │                    │          │
+│  ArUco   │      LABEL        │  ArUco   │
+│   200    │                   │   201    │
+│          │────────────────────│          │
+│          │   description     │          │
+│          │     text          │          │
+└──────────┴────────────────────┴──────────┘
+```
+
+The app detects both markers, uses their known positions to warp the middle
+region flat via `findHomography`, and reads the text with Tesseract.js (or sends
+the crop to Gemini when an API key is configured).
+
+**Generate the default set** (Apple, Banana, Orange, Basket, Block, Bottle, Plant):
+
+```bash
+uv run python tags-and-borders/make_labeled_tags.py
+```
+
+**Create your own labels** — pass `"Label:Description"` pairs:
+
+```bash
+uv run python tags-and-borders/make_labeled_tags.py \
+    --tags "Coffee Mug:White ceramic mug" \
+           "Keys:Car keys with red fob" \
+           "Charger:USB-C phone charger"
+```
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tags` | built-in 7 | Space-separated `"Label:Description"` pairs |
+| `--size` | `40` | ArUco marker side in mm |
+| `--dict` | `DICT_6X6_250` | ArUco dictionary |
+| `--dpi` | `300` | Output resolution |
+| `--out` | `printables/nav_tags.pdf` | Output path |
+
+**Tips for good labels:**
+- Use **short, distinct words** — `"Apple"` not `"Red Delicious Apple"`
+- Labels are printed in **ALL CAPS** automatically for better OCR
+- Keep descriptions to 3–5 words — they are context for the AI, not documentation
+- Use a marker size of **40 mm+** so the text region is readable by the camera
+- **Laminate** the printed cards for durability
 
 ### Step 2, calibrate joints
 
@@ -74,17 +129,21 @@ Video is saved to `real_ik_run.mp4`.
 
 ## Simulated scene: stations and props
 
-The sim places five pedestals around the robot's start point, each with a nav
-fiducial on the side turned back toward the origin, so one opening sweep finds
-all of them. Each carries something different:
+The sim places pedestals around the robot's start point, each with a labeled
+nav tag on the side turned back toward the origin. All tags use the same ArUco
+pair (200 & 201) — the station identity comes from the **label text** printed
+between them (read via homography + OCR). Each station carries something
+different:
 
-| Nav tag | Prop | Object tag | Pick status |
+| Label | Prop | Object tag | Pick status |
 |---|---|---|---|
-| 200 | jenga block | 101 | the pick under development |
-| 201 | apple | 102 | tag lies flat — same geometry as the block |
-| 202 | banana | 103 | tag lies flat — same geometry as the block |
-| 203 | water bottle | 104 | **to do** — see below |
-| 204 | potted plant | — | the thing to be watered |
+| Block | jenga block | 101 | the pick under development |
+| Apple | apple | 102 | tag lies flat — same geometry as the block |
+| Banana | banana | 103 | tag lies flat — same geometry as the block |
+| Bottle | water bottle | 104 | **to do** — see below |
+| Plant | potted plant | — | the thing to be watered |
+| Basket | drop basket | — | where picked items go |
+| Orange | orange | 105 | tag lies flat — same geometry as the block |
 
 Props are built from MuJoCo primitives rather than imported meshes. What a pick
 needs from an object is somewhere to put the jaws and a tag to aim at, and a
@@ -106,7 +165,7 @@ than a flat-sided one. That needs:
   line the jaws up with — any diameter will do, so the roll constraint that lines
   the jaws up with a tag edge stops being meaningful;
 - somewhere to put it down again, since the point of the bottle is watering the
-  plant at station 204.
+  plant.
 
 ### To do: apple and banana as movable objects
 

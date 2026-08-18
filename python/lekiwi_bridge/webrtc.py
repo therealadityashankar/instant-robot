@@ -67,7 +67,12 @@ class Peer:
 
     async def connect(self, timeout_s: float = 30.0) -> None:
         url = f"{self.signal_url}/signal/{self.room}?role=robot&token={self.token}"
-        self._ws = await websockets.connect(url, open_timeout=timeout_s)
+        self._ws = await websockets.connect(
+            url,
+            open_timeout=timeout_s,
+            ping_interval=20.0,
+            ping_timeout=20.0,
+        )
 
         @self.pc.on("datachannel")
         def on_datachannel(channel):

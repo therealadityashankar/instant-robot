@@ -19,6 +19,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@types/node": "^26.1.1",
     "playwright-core": "^1.62.1",
+    "puppeteer-core": "^25.8.0",
     "svelte": "^5.56.6",
     "svelte-check": "^4.7.3",
     "tsx": "^4.23.1",
@@ -31,6 +32,7 @@
     "@types/three": "^0.185.1",
     "feetech.js": "^0.1.2",
     "mujoco-js": "^0.0.7",
+    "tesseract.js": "^7.0.0",
     "three": "^0.185.1"
   }
 }

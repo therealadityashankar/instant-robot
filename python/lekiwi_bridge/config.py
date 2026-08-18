@@ -25,6 +25,7 @@ class Config:
     arm_ids: list[int] = field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
     wheel_ids: list[int] = field(default_factory=lambda: [7, 8, 9])
     camera_paths: list[str] = field(default_factory=list)
+    camera_fps: int = 5
     watchdog_s: float = 0.2
 
     @staticmethod
@@ -48,5 +49,6 @@ class Config:
             arm_ids=_ids(os.environ.get("LEKIWI_ARM_IDS"), [1, 2, 3, 4, 5, 6]),
             wheel_ids=_ids(os.environ.get("LEKIWI_WHEEL_IDS"), [7, 8, 9]),
             camera_paths=cameras,
+            camera_fps=int(os.environ.get("LEKIWI_CAM_FPS", "5")),
             watchdog_s=int(os.environ.get("LEKIWI_WATCHDOG_MS", "200")) / 1000,
         )

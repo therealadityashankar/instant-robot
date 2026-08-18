@@ -68,45 +68,83 @@ class Camera:
         self._capture = cap
 
     def close(self) -> None:
+        if self._capture is not None:
+            try:
+                self._capture.close()
+            except Exception:
+                pass
+            self._capture = None
         if self._device is not None:
             try:
                 self._device.close()
             except Exception:
                 pass
             self._device = None
-            self._capture = None
 
-    async def frames(self) -> AsyncIterator[bytes]:
-        """Yields raw JPEG bytes, one per captured frame, until cancelled."""
-        if self._capture is None:
-            self.open()
-        cap = self._capture
-        if cap is None:
-            raise RuntimeError(f"camera {self.index} not open")
+    async def frames(self, cycle_interval_s: float = 15.0) -> AsyncIterator[bytes]:
+        """Yields raw JPEG bytes, one per captured frame, until cancelled.
+
+        Periodically recycles (closes and re-opens) the V4L2 device every
+        cycle_interval_s seconds (default 15s) and guards against driver stalls,
+        ensuring smooth continuous streaming without USB lockups.
+        """
         loop = asyncio.get_running_loop()
+        target_interval = 1.0 / max(1, self._fps)
 
-        # Every one of these is a blocking ioctl/mmap, so each hops to a thread:
-        # stalling the event loop here would stall the servo control stream too.
-        def _enter():
-            cap.__enter__()
-            return iter(cap)
-
-        it = await loop.run_in_executor(None, _enter)
-        try:
-            while True:
-                frame = await loop.run_in_executor(None, next, it, None)
-                if frame is None:
-                    return
-                yield bytes(frame)
-        finally:
-            # Generator cleanup is deferred, so this can land after close() has
-            # already torn the device down — in which case stream_off ioctls on a
-            # closed fd. Nothing left to release at that point, so it's ignorable.
+        while True:
+            cap = None
             try:
-                await loop.run_in_executor(None, cap.__exit__, None, None, None)
+                self.open()
+                cap = self._capture
+                if cap is None:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                def _enter():
+                    cap.__enter__()
+                    return iter(cap)
+
+                it = await loop.run_in_executor(None, _enter)
+                cycle_start = loop.time()
+
+                try:
+                    while loop.time() - cycle_start < cycle_interval_s:
+                        t0 = loop.time()
+                        frame = await asyncio.wait_for(
+                            loop.run_in_executor(None, next, it, None),
+                            timeout=2.5,
+                        )
+                        if frame is None:
+                            break
+                        yield bytes(frame)
+                        elapsed = loop.time() - t0
+                        to_sleep = target_interval - elapsed
+                        if to_sleep > 0.002:
+                            await asyncio.sleep(to_sleep)
+                except asyncio.TimeoutError:
+                    log.warning("camera %d: capture stalled (no frame in 2.5s), recycling device", self.index)
+                finally:
+                    try:
+                        await loop.run_in_executor(None, cap.__exit__, None, None, None)
+                    except Exception as e:
+                        log.debug("camera %d: stream teardown error (%s)", self.index, e)
+                    self.close()
+
+                # Brief pause before next cycle
+                await asyncio.sleep(0.05)
+
+            except asyncio.CancelledError:
+                if cap is not None:
+                    try:
+                        await loop.run_in_executor(None, cap.__exit__, None, None, None)
+                    except Exception:
+                        pass
+                self.close()
+                raise
             except Exception as e:
-                log.debug("camera %d: stream teardown after close (%s)", self.index, e)
-            self.close()
+                log.warning("camera %d: capture error: %s (retrying in 0.5s)", self.index, e)
+                self.close()
+                await asyncio.sleep(0.5)
 
 
 def default_camera_paths() -> list[str]:

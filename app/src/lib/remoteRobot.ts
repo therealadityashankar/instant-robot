@@ -79,7 +79,7 @@ export class RemoteRobot {
 
     const rpcChan = pc.createDataChannel(CH_RPC, { ordered: true });
     const streamChan = pc.createDataChannel(CH_STREAM, { ordered: false, maxRetransmits: 0 });
-    const videoChan = pc.createDataChannel(CH_VIDEO, { ordered: false, maxRetransmits: 0 });
+    const videoChan = pc.createDataChannel(CH_VIDEO, { ordered: false, maxPacketLifeTime: 400 });
     this.rpcChan = rpcChan;
     this.streamChan = streamChan;
     this.videoChan = videoChan;
@@ -178,8 +178,30 @@ export class RemoteRobot {
     ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp } satisfies SignalMessage));
   }
 
+  private lastVideoLog = 0;
+  private videoRxCount = 0;
+  private lastSeq = -1;
+
   private handleVideoMessage(data: ArrayBuffer) {
     const frame = decodeVideoFrame(data);
+    if (!frame) {
+      console.warn('[WebRTC Video] Received unparseable binary message, length:', data.byteLength);
+      return;
+    }
+    this.videoRxCount++;
+    if (this.lastSeq !== -1 && frame.seq !== this.lastSeq + 1) {
+      const dropped = frame.seq - this.lastSeq - 1;
+      if (dropped > 0) {
+        console.warn(`[WebRTC Video] Frame gap! Expected seq ${this.lastSeq + 1}, got ${frame.seq} (${dropped} dropped over network)`);
+      }
+    }
+    this.lastSeq = frame.seq;
+
+    const now = performance.now();
+    if (now - this.lastVideoLog > 2000) {
+      console.log(`[WebRTC Video] Rx OK: cam ${frame.camera}, seq ${frame.seq}, size ${(frame.jpeg.byteLength / 1024).toFixed(1)} KB, total frames Rx: ${this.videoRxCount}`);
+      this.lastVideoLog = now;
+    }
     if (frame) this.onVideoFrame?.(frame.camera, frame.jpeg);
   }
 

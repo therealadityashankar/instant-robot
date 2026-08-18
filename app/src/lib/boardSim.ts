@@ -80,6 +80,8 @@ export type PropKind = 'block' | 'apple' | 'orange' | 'banana' | 'bottle' | 'pla
 export interface StationDef {
   /** Nav fiducial on the pedestal's side, used to find and drive to it. */
   navTag: number;
+  label?: string;
+  description?: string;
   x: number;
   y: number;
   prop: PropKind;
@@ -105,18 +107,18 @@ export interface StationDef {
  * which is what makes a single opening sweep enough to find all of them.
  */
 export const STATIONS: StationDef[] = [
-  { navTag: 200, ...ringPos(0), prop: 'block', propTag: 101 },
-  { navTag: 201, ...ringPos(1), prop: 'apple', propTag: 102 },
-  { navTag: 202, ...ringPos(2), prop: 'banana', propTag: 103 },
+  { navTag: 200, label: 'BLOCK', description: 'Wooden jenga block', ...ringPos(0), prop: 'block', propTag: 101 },
+  { navTag: 201, label: 'APPLE', description: 'Red fruit, pick it up', ...ringPos(1), prop: 'apple', propTag: 102 },
+  { navTag: 202, label: 'BANANA', description: 'Yellow curved fruit', ...ringPos(2), prop: 'banana', propTag: 103 },
   // Where picked things go. No marker: it is a destination, not a target.
-  { navTag: 205, ...ringPos(3), prop: 'basket', propTag: 0 },
-  { navTag: 206, ...ringPos(4), prop: 'orange', propTag: 105 },
+  { navTag: 205, label: 'BASKET', description: 'Drop zone for picked items', ...ringPos(3), prop: 'basket', propTag: 0 },
+  { navTag: 206, label: 'ORANGE', description: 'Round citrus fruit', ...ringPos(4), prop: 'orange', propTag: 105 },
   // Bottle and plant: the watering job, which nothing can do yet. Set out beyond
   // the basket on the same line, with their nav tags turned away so an opening
   // sweep doesn't offer them. They are there to be found deliberately, once the
   // sideways-tag grasp exists — not to clutter the list with dead ends.
-  { navTag: 203, x: -0.10, y: -1.95, prop: 'bottle', propTag: 104, discoverable: false },
-  { navTag: 204, x: -0.15, y: -2.75, prop: 'plant', propTag: 0, discoverable: false },
+  { navTag: 203, label: 'BOTTLE', description: 'Water bottle, side tag', x: -0.10, y: -1.95, prop: 'bottle', propTag: 104, discoverable: false },
+  { navTag: 204, label: 'PLANT', description: 'Potted plant, water me', x: -0.15, y: -2.75, prop: 'plant', propTag: 0, discoverable: false },
 ];
 
 /**
@@ -449,29 +451,34 @@ function stationGeoms(physics: boolean): string[] {
         );
       }
     }
-    // The nav tag on the +X side, which stationYaw has turned toward the origin.
-    const tz = STATION_H - STATION_TAG_HALF - 0.02;
-    // White sheet, then the marker just proud of it: the black square is exactly
-    // STATION_TAG_HALF, which is the size solvePnP is told about.
+    // The dual nav tag card on the +X side, which stationYaw has turned toward the origin.
+    const tz = STATION_H - 0.045;
+    // White sheet backing plate for the entire card (160mm wide x 60mm high)
     g.push(
       `<geom name="station_navtag_face_${n}" type="box" ` +
         `pos="${f(STATION_HALF + 0.0005)} 0 ${f(tz)}" ` +
-        `size="0.0005 ${f(STATION_TAG_HALF * 1.35)} ${f(STATION_TAG_HALF * 1.35)}" ` +
-        `rgba="0.97 0.97 0.97 1" contype="0" conaffinity="0" group="1"/>`,
+        `size="0.0005 0.080 0.030" ` +
+        `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
+    // Left marker (Tag 200) - size 40mm x 40mm (half 0.020), on -Y side (viewer left)
     g.push(
       `<geom name="station_navtag_${n}" type="box" ` +
-        `pos="${f(STATION_HALF + 0.0015)} 0 ${f(tz)}" ` +
-        `size="0.0005 ${f(STATION_TAG_HALF)} ${f(STATION_TAG_HALF)}" ` +
-        `rgba="0.1 0.1 0.1 1" contype="0" conaffinity="0" group="1"/>`,
+        `pos="${f(STATION_HALF + 0.0015)} -0.055 ${f(tz)}" ` +
+        `size="0.0005 0.020 0.020" ` +
+        `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
-    // A readable number under the marker, so a station can be identified by eye
-    // — in the sim view, in a screenshot, and on the printed sheet.
+    // Right marker (Tag 201) - size 40mm x 40mm (half 0.020), on +Y side (viewer right)
     g.push(
-      // A wide plate under the marker, carrying the number left-to-right.
+      `<geom name="station_navtag_right_${n}" type="box" ` +
+        `pos="${f(STATION_HALF + 0.0015)} 0.055 ${f(tz)}" ` +
+        `size="0.0005 0.020 0.020" ` +
+        `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
+    );
+    // Middle text plate carrying the station's label (top) and description (bottom)
+    g.push(
       `<geom name="station_label_${n}" type="box" ` +
-        `pos="${f(STATION_HALF + 0.0015)} 0 ${f(tz - STATION_TAG_HALF - 0.016)}" ` +
-        `size="0.0005 ${f(STATION_TAG_HALF * 0.95)} 0.014" ` +
+        `pos="${f(STATION_HALF + 0.0015)} 0 ${f(tz)}" ` +
+        `size="0.0005 0.030 0.020" ` +
         `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
     g.push(...propGeoms(s, physics));

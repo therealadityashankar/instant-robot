@@ -45,9 +45,15 @@
   import RotationControl from './RotationControl.svelte';
   import { loadCv, type Cv } from './lib/cv';
   import { boardTagCentres, BORDERED_IDS, type TagCentres } from './lib/board';
-  import { createDetector, detectMarkers, type Detector } from './lib/homography';
+  import { createDetector, detectMarkers, detectAllMarkers, type Detector, type MarkerDetection } from './lib/homography';
   import { boardPoseFromTags, blockBoardXY } from './lib/detect3d';
   import { solvePnpMarkerPose, matMul3, apply3 } from './lib/pose';
+  import {
+    LEFT_NAV_ID, RIGHT_NAV_ID,
+    hasLabeledTagPair, extractLabeledTag, initTesseract,
+    isTagPairReadyForOcr,
+    type LabeledTagInfo,
+  } from './lib/labelTag';
   import {
     matMul3x3,
     rotAngleBetween,
@@ -117,7 +123,7 @@
 
   // ── Remembered places ───────────────────────────────────────────────────────
   // Nav tags (200+) the robot has seen, with where they were in the world at the
-  // time. This is what turns "drive to tag 203" from something you have to know
+  // time. This is what turns a station from something you have to know
   // into a button that appears once the robot has looked around.
   interface KnownTag {
     id: number;
@@ -127,8 +133,20 @@
     /** Direction the tag's printed face points, world radians. Needed to park
      *  square-on rather than merely nearby. */
     faceYaw: number;
+    /** OCR'd label from the labeled tag (e.g. "APPLE"). */
+    label?: string;
+    /** OCR'd description from the labeled tag (e.g. "Red fruit, pick it up"). */
+    description?: string;
   }
   let knownTags = $state<Map<number, KnownTag>>(new Map());
+  // Labeled tag OCR state: tracks the last-seen pair to avoid re-OCR'ing every frame.
+  let lastLabeledOcr = $state<{ label: string; ts: number } | null>(null);
+  let labeledOcrBusy = $state(false);
+  let lastOcrText = $state('');
+  let lastOcrDesc = $state('');
+  let lastOcrLabelImgUrl = $state('');
+  let lastOcrDescImgUrl = $state('');
+  let lastOcrFullImgUrl = $state('');
   let atTag = $state<number | null>(null); // the place we've most recently arrived at
   let exploring = $state(false);
   let exploreCancel = false;
@@ -293,12 +311,12 @@
   let intrinsics = $state<Intrinsics | null>(loadIntrinsics());
   const TAG_MM = 16; // board border-tag size
   const BLOCK_MARKER_MM = 15; // block ArUco marker size (the black square, not the white border)
-  // Onboard-camera nav fiducial: a plain DICT_6X6_250 marker, ID outside the board
-  // border range (0–63) and object-tag range (100–199). 200 = shelf tag; 201, 202…
-  // are the extra station tags from make_nav_tags.py. Which one the base drives
-  // toward (+ its printed size) is selectable at runtime.
+  // Onboard-camera nav fiducial: labeled tags use a pair of markers (200 left,
+  // 201 right) with text between them. The station identity comes from the OCR'd
+  // label, not from the tag number. The nav system drives toward the LEFT marker
+  // (200) by default — its pose is what solvePnP uses for the approach.
   let navTagId = $state(200); // the tag the base is currently driving toward
-  let navTagMm = $state(80); // printed black marker side (mm) — must match the printout
+  let navTagMm = $state(40); // printed black marker side (mm) — must match the printout
   const NAV_TAG_LO = 200, NAV_TAG_HI = 250; // nav-fiducial id range to auto-offer
   // Nav-fiducial ids currently in view (from the onboard camera) — each gets its
   // own "Drive to tag N" button, so no manual id selector is needed.
@@ -342,19 +360,94 @@
 
   async function selectRemoteCamera(cam: number) {
     activeRemoteCam = cam;
-    await robot.setActiveCamera(cam).catch((e) => console.warn('setActiveCamera failed', e));
+    if (cam === REMOTE_ARM_CAM) remoteArmLive = true;
+    if (cam === REMOTE_BASE_CAM) remoteBaseLive = true;
+    if (robot.connected) {
+      try {
+        appendLog(`[Camera] Switching to camera ${cam === REMOTE_ARM_CAM ? 'Arm (1)' : 'Base (0)'}...`);
+        const res = await robot.setActiveCamera(cam) as any;
+        if (res && typeof res.activeCamera === 'number') {
+          activeRemoteCam = res.activeCamera;
+          if (robot.info && typeof res.hardwareCameras === 'number') {
+            robot.info.cameras = res.hardwareCameras;
+          }
+          appendLog(`[Camera] Active camera is now ${activeRemoteCam === REMOTE_ARM_CAM ? 'Arm (1)' : 'Base (0)'}`);
+        }
+      } catch (e) {
+        console.warn('setActiveCamera failed', e);
+        appendLog(`[Camera] Camera switch error: ${e}`);
+      }
+    }
+    paintRemote(REMOTE_BASE_CAM);
+    paintRemote(REMOTE_ARM_CAM);
   }
+
+  let latestBaseDetections: MarkerDetection[] = [];
+  let latestArmDetections: MarkerDetection[] = [];
 
   /** Blit the newest decoded frame into whichever panel canvas owns that camera. */
   function paintRemote(cam: number) {
     const src = remoteCams.canvas(cam);
     const dst = cam === REMOTE_BASE_CAM ? remoteBaseCanvas : remoteArmCanvas;
-    if (!src || !dst) return;
-    if (dst.width !== src.width || dst.height !== src.height) {
+    if (!dst) return;
+    if (src && (dst.width !== src.width || dst.height !== src.height)) {
       dst.width = src.width;
       dst.height = src.height;
+    } else if (!src && (dst.width !== 640 || dst.height !== 480)) {
+      dst.width = 640;
+      dst.height = 480;
     }
-    dst.getContext('2d')?.drawImage(src, 0, 0);
+    const ctx = dst.getContext('2d');
+    if (!ctx) return;
+
+    const isLive = activeRemoteCam === cam;
+    if (src) {
+      ctx.drawImage(src, 0, 0);
+    } else {
+      ctx.fillStyle = '#111318';
+      ctx.fillRect(0, 0, dst.width, dst.height);
+    }
+
+    if (!isLive) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(10, 12, 18, 0.7)';
+      ctx.fillRect(0, 0, dst.width, dst.height);
+      ctx.fillStyle = '#ffbb00';
+      ctx.font = 'bold 15px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('⏸ PAUSED', dst.width / 2, dst.height / 2);
+      ctx.restore();
+      return;
+    }
+
+    const detections = cam === REMOTE_BASE_CAM ? latestBaseDetections : latestArmDetections;
+    if (detections && detections.length > 0) {
+      ctx.save();
+      for (const det of detections) {
+        const c = det.corners;
+        ctx.strokeStyle = '#00ff66';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(c[0][0], c[0][1]);
+        ctx.lineTo(c[1][0], c[1][1]);
+        ctx.lineTo(c[2][0], c[2][1]);
+        ctx.lineTo(c[3][0], c[3][1]);
+        ctx.closePath();
+        ctx.stroke();
+
+        const cx = (c[0][0] + c[1][0] + c[2][0] + c[3][0]) / 4;
+        const cy = (c[0][1] + c[1][1] + c[2][1] + c[3][1]) / 4;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(cx - 24, cy - 14, 48, 20);
+        ctx.fillStyle = '#00ff66';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`ID ${det.id}`, cx, cy - 4);
+      }
+      ctx.restore();
+    }
   }
   let camDeviceId = $state<string>(''); // selected onboard/base camera (blank → default)
   // `baseCamOff` is the user having deliberately turned the base camera off — it
@@ -401,13 +494,18 @@
   // the effect that writes it makes the effect depend on its own output, which
   // re-runs it forever and takes the whole component down with it.
   let pickLogBuf: string[] = [];
-  $effect(() => {
-    const msg = armPickMsg;
-    if (!msg) return;
+
+  function appendLog(msg: string) {
     if (!pickLogT0) pickLogT0 = performance.now();
     const t = ((performance.now() - pickLogT0) / 1000).toFixed(1).padStart(5);
     pickLogBuf = [...pickLogBuf, `${t}s  ${msg}`].slice(-PICK_LOG_MAX);
     pickLog = pickLogBuf;
+  }
+
+  $effect(() => {
+    const msg = armPickMsg;
+    if (!msg) return;
+    appendLog(msg);
   });
   let armPickBusy = $state(false);
   let logOpen = $state(false);
@@ -538,12 +636,9 @@
   // the tag face is (rad; 0 = viewing it head-on, sign = which way it's rotated).
   let shelfTagCam = $state<[number, number, number, number] | null>(null);
   let navigating = $state(false); // auto-driving toward the shelf tag
-  // Stop this far (m) from the tag. 0.22 rather than a rounder number because it
-  // is where the arm can actually reach onto the surface: parking at 0.30 left the
-  // board at the edge of the arm's envelope, and the gap was being closed by hand
-  // with the forward nudge every single time. Encoding it here makes arriving mean
-  // "ready to pick" instead of "ready to nudge".
-  let navStandoff = $state(0.12);
+  const SCAN_STANDOFF = 0.34; // standoff for wide-angle camera OCR scan
+  const WORK_STANDOFF = 0.18; // close standoff for arm picking reach
+  let navStandoff = $state(WORK_STANDOFF);
   /**
    * Where to park to do everything from.
    *
@@ -934,35 +1029,43 @@
   /** The gripper's frame right now: rotation (row-major) and origin. */
   function graspFrame(): { R: number[]; t: number[] } | null {
     if (!session || graspSiteId < 0) return null;
-    const xm = session.data.site_xmat as Float64Array;
-    const xp = session.data.site_xpos as Float64Array;
-    const o = graspSiteId * 9, p = graspSiteId * 3;
-    return {
-      R: [xm[o], xm[o + 1], xm[o + 2], xm[o + 3], xm[o + 4], xm[o + 5], xm[o + 6], xm[o + 7], xm[o + 8]],
-      t: [xp[p], xp[p + 1], xp[p + 2]],
-    };
+    try {
+      const xm = session.data.site_xmat as Float64Array;
+      const xp = session.data.site_xpos as Float64Array;
+      const o = graspSiteId * 9, p = graspSiteId * 3;
+      return {
+        R: [xm[o], xm[o + 1], xm[o + 2], xm[o + 3], xm[o + 4], xm[o + 5], xm[o + 6], xm[o + 7], xm[o + 8]],
+        t: [xp[p], xp[p + 1], xp[p + 2]],
+      };
+    } catch {
+      return null;
+    }
   }
 
   /** Both fingertips against the block, with the block between them. */
   function fingersOnBlock(tag: number = blockTag): boolean {
     const adr = propAdr.get(tag);
     if (!session || !adr || fingerSiteIds[0] < 0 || fingerSiteIds[1] < 0) return false;
-    const sx = session.data.site_xpos as Float64Array;
-    const q = session.data.qpos as Float64Array;
-    const blockQadr = adr.q;
-    const a = [sx[fingerSiteIds[0] * 3], sx[fingerSiteIds[0] * 3 + 1], sx[fingerSiteIds[0] * 3 + 2]];
-    const b = [sx[fingerSiteIds[1] * 3], sx[fingerSiteIds[1] * 3 + 1], sx[fingerSiteIds[1] * 3 + 2]];
-    const c = [q[blockQadr], q[blockQadr + 1], q[blockQadr + 2]];
-    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    const gap = Math.hypot(d[0], d[1], d[2]);
-    if (gap < 1e-6 || gap > 0.06) return false; // jaws wide open: nothing is held
-    const u = [d[0] / gap, d[1] / gap, d[2] / gap];
-    const ca = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    const sa = ca[0] * u[0] + ca[1] * u[1] + ca[2] * u[2];
-    if (sa <= 0 || sa >= gap) return false; // block centre is not between the jaws
-    // …and the jaw line passes close to it, rather than above or beside it.
-    const perp = Math.hypot(ca[0] - sa * u[0], ca[1] - sa * u[1], ca[2] - sa * u[2]);
-    return perp < 0.025;
+    try {
+      const sx = session.data.site_xpos as Float64Array;
+      const q = session.data.qpos as Float64Array;
+      const blockQadr = adr.q;
+      const a = [sx[fingerSiteIds[0] * 3], sx[fingerSiteIds[0] * 3 + 1], sx[fingerSiteIds[0] * 3 + 2]];
+      const b = [sx[fingerSiteIds[1] * 3], sx[fingerSiteIds[1] * 3 + 1], sx[fingerSiteIds[1] * 3 + 2]];
+      const c = [q[blockQadr], q[blockQadr + 1], q[blockQadr + 2]];
+      const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const gap = Math.hypot(d[0], d[1], d[2]);
+      if (gap < 1e-6 || gap > 0.06) return false; // jaws wide open: nothing is held
+      const u = [d[0] / gap, d[1] / gap, d[2] / gap];
+      const ca = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      const sa = ca[0] * u[0] + ca[1] * u[1] + ca[2] * u[2];
+      if (sa <= 0 || sa >= gap) return false; // block centre is not between the jaws
+      // …and the jaw line passes close to it, rather than above or beside it.
+      const perp = Math.hypot(ca[0] - sa * u[0], ca[1] - sa * u[1], ca[2] - sa * u[2]);
+      return perp < 0.025;
+    } catch {
+      return false;
+    }
   }
 
   /** Latch the block to the gripper while it's held; let go when the jaws open. */
@@ -1268,6 +1371,7 @@
       }).catch((e) => {
         detectMsg = 'OpenCV failed to load: ' + (e instanceof Error ? e.message : String(e));
       });
+      initTesseract().catch(() => {});
       mj = await loadMujocoModule();
       await loadScene(selectedRobot);
       loop();
@@ -1497,30 +1601,96 @@
   // share one detection path instead of two implementations that can disagree.
   let tagTextures = new Map<number, HTMLCanvasElement>();
 
-  /** A number on a white plate, for labelling a station by eye. */
-  function labelCanvas(text: string): HTMLCanvasElement {
-    // Portrait, and drawn on its side.
-    //
-    // The plate is a thin box on the pedestal's side, and that face maps its
-    // texture axes *swapped* relative to the world — the canvas's width runs down
-    // the plate's height. A landscape canvas therefore arrives both turned and
-    // squashed, which is why the number came out stretched. Inverting the canvas
-    // aspect and drawing the text rotated a quarter turn cancels both: it lands
-    // horizontal, at the proportions it was drawn.
-    const w = 96, h = 256;
+  function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+    const words = text.split(/\s+/).filter(Boolean);
+    if (!words.length) return [''];
+    const lines: string[] = [];
+    let curr = '';
+    for (const w of words) {
+      const testLine = curr ? `${curr} ${w}` : w;
+      if (ctx.measureText(testLine).width <= maxWidth || !curr) {
+        curr = testLine;
+      } else {
+        lines.push(curr);
+        curr = w;
+      }
+    }
+    if (curr) lines.push(curr);
+    return lines;
+  }
+
+  /** A labeled card canvas on a white plate, with multi-line wrapping. */
+  function stationLabelCanvas(label: string, desc: string): HTMLCanvasElement {
+    const w = 240, h = 480;
     const c = document.createElement('canvas');
     c.width = w;
     c.height = h;
     const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#111';
-    ctx.font = `bold ${Math.round(w * 0.78)}px ui-sans-serif, system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+
+    // Rotate -90° to align with MuJoCo box geom UV mapping on +X face
+    ctx.save();
     ctx.translate(w / 2, h / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.fillText(text, 0, 0);
+
+    const W_eff = h; // 480
+    const H_eff = w; // 240
+    const pad = 18;
+    const maxTextW = W_eff - pad * 2;
+
+    // Top half: LABEL
+    const labelH = H_eff / 2;
+    let labelFont = 44;
+    ctx.font = `bold ${labelFont}px ui-sans-serif, Arial, sans-serif`;
+    let labelLines = wrapCanvasText(ctx, label.toUpperCase(), maxTextW);
+    while (labelFont > 20 && (labelLines.length > 2 || labelLines.length * labelFont * 1.2 > labelH - 20)) {
+      labelFont -= 2;
+      ctx.font = `bold ${labelFont}px ui-sans-serif, Arial, sans-serif`;
+      labelLines = wrapCanvasText(ctx, label.toUpperCase(), maxTextW);
+    }
+
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const labelLineH = labelFont * 1.2;
+    const totalLabelH = labelLines.length * labelLineH;
+    let yL = -H_eff / 2 + (labelH - totalLabelH) / 2 + labelLineH / 2;
+    for (const line of labelLines) {
+      ctx.fillText(line, 0, yL);
+      yL += labelLineH;
+    }
+
+    // Separator line
+    ctx.strokeStyle = '#bbbbbb';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-W_eff * 0.44, 0);
+    ctx.lineTo(W_eff * 0.44, 0);
+    ctx.stroke();
+
+    // Bottom half: DESCRIPTION
+    if (desc) {
+      const descH = H_eff / 2;
+      let descFont = 24;
+      ctx.font = `${descFont}px ui-sans-serif, Arial, sans-serif`;
+      let descLines = wrapCanvasText(ctx, desc, maxTextW);
+      while (descFont > 14 && (descLines.length > 3 || descLines.length * descFont * 1.3 > descH - 20)) {
+        descFont -= 2;
+        ctx.font = `${descFont}px ui-sans-serif, Arial, sans-serif`;
+        descLines = wrapCanvasText(ctx, desc, maxTextW);
+      }
+      ctx.fillStyle = '#333333';
+      const descLineH = descFont * 1.3;
+      const totalDescH = descLines.length * descLineH;
+      let yD = (descH - totalDescH) / 2 + descLineH / 2;
+      for (const line of descLines) {
+        ctx.fillText(line, 0, yD);
+        yD += descLineH;
+      }
+    }
+
+    ctx.restore();
     return c;
   }
 
@@ -1530,23 +1700,16 @@
     const add = (geomName: string, id: number) => {
       const gid = mj!.mj_name2id(session!.model, 5 /* mjOBJ_GEOM */, geomName);
       if (gid < 0) return;
-      // No quiet zone inside the texture: the geom IS the black square, and its
-      // size is what solvePnP is told (navTagMm / BLOCK_MARKER_MM). Padding here
-      // would shrink the printed marker without shrinking the number, so every
-      // distance would read short. The white surround is a separate, larger geom.
       m.set(gid, markerCanvas(cv!, cv!.DICT_6X6_250, id, 192));
     };
-    // Only the two markers anything actually reads. Texturing all 64 board border
-    // tags as well cost ~128 MB of GPU memory across the renderers and made the
-    // whole app crawl; they're decorative here.
-    // Every nav tag and every prop tag — nine 192px textures, a megabyte or so.
-    // Texturing the 64 board border tags as well is what cost ~128 MB of GPU
-    // memory and made the app crawl; those stay decorative.
+    // Every station now renders a dual-tag (200 left, 201 right) navigation card
+    // with its label (top) and description (bottom) in between.
     for (const st of STATIONS) {
-      add(`station_navtag_${st.navTag}`, st.navTag);
-      if (st.propTag) add(`ptag_${st.propTag}`, st.propTag);
+      add(`station_navtag_${st.navTag}`, 200);
+      add(`station_navtag_right_${st.navTag}`, 201);
       const lid = mj!.mj_name2id(session!.model, 5, `station_label_${st.navTag}`);
-      if (lid >= 0) m.set(lid, labelCanvas(String(st.navTag)));
+      if (lid >= 0) m.set(lid, stationLabelCanvas(st.label || st.prop, st.description || ''));
+      if (st.propTag) add(`ptag_${st.propTag}`, st.propTag);
     }
     add('block_tag', STATION_OBJECT_TAG);
     tagTextures = m;
@@ -1691,6 +1854,8 @@
         id: k.id,
         p: [k.x, k.y, k.z],
         faceYaw: k.faceYaw,
+        label: k.label,
+        description: k.description,
       })));
       lastRenderedPlaces = knownTags;
     }
@@ -1839,6 +2004,8 @@
       else restArm();
       maybeDetect();
       maybeDetectArm();
+      if (remoteBaseLive) paintRemote(REMOTE_BASE_CAM);
+      if (remoteArmLive) paintRemote(REMOTE_ARM_CAM);
       renderTagView();
       renderPov();
       maybeNavigate();
@@ -1975,6 +2142,8 @@
 
     maybeDetect();
     maybeDetectArm();
+    if (remoteBaseLive) paintRemote(REMOTE_BASE_CAM);
+    if (remoteArmLive) paintRemote(REMOTE_ARM_CAM);
     renderTagView();
     renderPov();
     maybeNavigate();
@@ -2169,6 +2338,7 @@
     if (!cv || !detector) return;
     const remote = remoteCams.canvas(REMOTE_ARM_CAM);
     const live = !!armCamStream || !!remote;
+    if (remoteArmLive && activeRemoteCam !== REMOTE_ARM_CAM) return;
     const source: CanvasImageSource | null =
       remote ?? (armCamStream ? armVideo : (armPovCanvas ?? null));
     if (!source) return;
@@ -2184,6 +2354,8 @@
     armGrabCtx.drawImage(source, 0, 0, width, height);
     armSrcMat.data.set(armGrabCtx.getImageData(0, 0, width, height).data);
     cv.cvtColor(armSrcMat, armGrayMat, cv.COLOR_RGBA2GRAY);
+    const allDetections = detectAllMarkers(cv, detector, armGrayMat);
+    latestArmDetections = allDetections;
     const corners = detectMarkers(cv, detector, armGrayMat);
 
     // Object tags (bordered ids, not the board border tags) → drive/pick buttons.
@@ -2855,12 +3027,16 @@
   /** World direction the jaws open along: fingertip to fingertip. */
   function jawAxisWorld(): number[] | null {
     if (!session || fingerSiteIds[0] < 0 || fingerSiteIds[1] < 0) return null;
-    const sx = session.data.site_xpos as Float64Array;
-    const a = fingerSiteIds[0] * 3;
-    const b = fingerSiteIds[1] * 3;
-    const v = [sx[b] - sx[a], sx[b + 1] - sx[a + 1], sx[b + 2] - sx[a + 2]];
-    const n = Math.hypot(v[0], v[1], v[2]);
-    return n > 1e-6 ? [v[0] / n, v[1] / n, v[2] / n] : null;
+    try {
+      const sx = session.data.site_xpos as Float64Array;
+      const a = fingerSiteIds[0] * 3;
+      const b = fingerSiteIds[1] * 3;
+      const v = [sx[b] - sx[a], sx[b + 1] - sx[a + 1], sx[b + 2] - sx[a + 2]];
+      const n = Math.hypot(v[0], v[1], v[2]);
+      return n > 1e-6 ? [v[0] / n, v[1] / n, v[2] / n] : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -3243,7 +3419,8 @@
   // Printed side length (mm) of a marker by id, so its solvePnP depth is metric.
   function markerSizeFor(id: number): number {
     if (tagCentresMm.has(id)) return TAG_MM; // board border tag
-    if (id === navTagId) return navTagMm; // nav / shelf fiducial
+    if (id >= NAV_TAG_LO && id <= NAV_TAG_HI) return navTagMm; // nav / shelf fiducial (200..250)
+    if (id === navTagId) return navTagMm;
     if (BORDERED_IDS.has(id)) return BLOCK_MARKER_MM; // object/block tag
     return 30; // unknown tag — assume a middling size
   }
@@ -3319,6 +3496,7 @@
     // detector cares about: real optics, real intrinsics, arbitrary frame size.
     const remote = remoteCams.canvas(REMOTE_BASE_CAM);
     const live = !!camStream || !!remote;
+    if (remoteBaseLive && activeRemoteCam !== REMOTE_BASE_CAM) return;
     const source: CanvasImageSource | null = remote ?? (camStream ? video : (povCanvas ?? null));
     if (!source) return;
     if (!ensureGrab(live)) return;
@@ -3334,8 +3512,10 @@
     const frame = grabCtx.getImageData(0, 0, width, height);
     srcMat.data.set(frame.data);
     cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+    const allDetections = detectAllMarkers(cv, detector, grayMat);
+    latestBaseDetections = allDetections;
     const corners = detectMarkers(cv, detector, grayMat);
-    const ids = [...corners.keys()].sort((a, b) => a - b);
+    const ids = allDetections.map((d) => d.id).sort((a, b) => a - b);
     if (ids.join(',') !== seenIds.join(',')) seenIds = ids;
     // 3-D tag view: full camera-frame pose of every detected marker. While the arm
     // is raised to view the board, the arm camera owns the tag view instead.
@@ -3354,36 +3534,130 @@
     // one-click drive targets. Only reassign when the set changes (avoid churn).
     const seen = [...corners.keys()].filter((id) => id >= NAV_TAG_LO && id <= NAV_TAG_HI).sort((a, b) => a - b);
     if (seen.join(',') !== visibleNavTags.join(',')) visibleNavTags = seen;
-    // Remember where each one is — this is what Explore is accumulating, and it
-    // works just as well when the robot simply happens to be facing a tag.
-    for (const id of seen) {
-      const mp = solvePnpMarkerPose(cv, corners.get(id)!, navTagMm, camW, camH, intr);
-      if (!mp) continue;
-      const cam = cameraWorld();
-      const pw = apply3(cam.R, [mp.t[0] / 1000, mp.t[1] / 1000, mp.t[2] / 1000]);
-      // The marker's outward normal is its local +Z — the 3rd column of its pose.
-      const nw = apply3(cam.R, [mp.R[2], mp.R[5], mp.R[8]]);
-      rememberTag(id, [pw[0] + cam.t[0], pw[1] + cam.t[1], pw[2] + cam.t[2]], nw);
+    // Remember where each one is — accumulated during exploration
+    if (exploring || hasExplored) {
+      for (const id of seen) {
+        const mp = solvePnpMarkerPose(cv, corners.get(id)!, navTagMm, camW, camH, intr);
+        if (!mp) continue;
+        const cam = cameraWorld();
+        const pw = apply3(cam.R, [mp.t[0] / 1000, mp.t[1] / 1000, mp.t[2] / 1000]);
+        // The marker's outward normal is its local +Z — the 3rd column of its pose.
+        const nw = apply3(cam.R, [mp.R[2], mp.R[5], mp.R[8]]);
+        rememberTag(id, [pw[0] + cam.t[0], pw[1] + cam.t[1], pw[2] + cam.t[2]], nw);
+      }
     }
 
-    // Onboard-camera shelf fiducial: its pose in the camera frame (m). Independent
-    // of the board — the onboard camera sees the shelf, not necessarily the board.
-    const st = corners.get(navTagId);
-    if (st) {
-      const mp = solvePnpMarkerPose(cv, st, navTagMm, camW, camH, intr);
-      if (mp) {
-        // Marker's outward normal (its local +Z) in camera coords = 3rd column of R.
-        // Square-on it points back at the camera ≈ (0,0,−1); its horizontal tilt is
-        // how far off-square we're viewing the shelf face.
-        const nx = mp.R[2], nz = mp.R[8];
-        const sq = Math.atan2(nx, -nz);
-        shelfTagCam = [mp.t[0] / 1000, mp.t[1] / 1000, mp.t[2] / 1000, sq];
-      } else {
-        shelfTagCam = null;
+    latestCorners = corners;
+
+    // ── Labeled tag OCR: if 200+201 pair is fully visible & large enough in frame ──
+    const leftTag = corners.get(LEFT_NAV_ID);
+    const rightTag = corners.get(RIGHT_NAV_ID);
+    const baseMovingFast = navigating && (Math.abs(baseVel.fwd) > 0.1 || Math.abs(baseVel.turn) > 0.1);
+    if (
+      leftTag &&
+      rightTag &&
+      isTagPairReadyForOcr(leftTag, rightTag, camW, camH) &&
+      !labeledOcrBusy &&
+      !baseMovingFast &&
+      (exploring || hasExplored || navigating)
+    ) {
+      const now2 = performance.now();
+      if (!lastLabeledOcr || now2 - lastLabeledOcr.ts > 1200) {
+        labeledOcrBusy = true;
+        appendLog('[Scan] Tag 200 & 201 detected in frame. Extracting homography warp...');
+        extractLabeledTag(cv!, corners, grayMat!).then((info) => {
+          labeledOcrBusy = false;
+          if (!info) {
+            appendLog('[Scan] Homography extraction returned null.');
+            return;
+          }
+          lastOcrFullImgUrl = info.fullDataUrl || '';
+          lastOcrLabelImgUrl = info.labelDataUrl || '';
+          lastOcrDescImgUrl = info.descDataUrl || '';
+          lastLabeledOcr = { label: info.label, ts: performance.now() };
+          lastOcrText = info.label;
+          lastOcrDesc = info.description;
+
+          if (info.label) {
+            appendLog(`[OCR Success] Label: "${info.label}" (${info.confidence}%), Desc: "${info.description}"`);
+          } else {
+            appendLog(`[OCR Raw] No clean label. Raw text: "${info.rawLabelText || '(empty)'}", Desc: "${info.rawDescText || '(empty)'}"`);
+          }
+
+          console.log(`[Tesseract OCR] Decoded station label: "${info.label}" (${info.description})`);
+
+          // Match station in 3D space
+          const mp = solvePnpMarkerPose(cv, leftTag, navTagMm, camW, camH, intr);
+          if (!mp) return;
+          const cam = cameraWorld();
+          const pw = apply3(cam.R, [mp.t[0] / 1000, mp.t[1] / 1000, mp.t[2] / 1000]);
+          const tagWx = pw[0] + cam.t[0];
+          const tagWy = pw[1] + cam.t[1];
+
+          let matchedId: number | null = null;
+          for (const [id, t] of knownTags) {
+            if (Math.hypot(t.x - tagWx, t.y - tagWy) < 0.45) {
+              matchedId = id;
+              break;
+            }
+          }
+          if (matchedId !== null) {
+            const existing = knownTags.get(matchedId);
+            if (existing) {
+              const next = new Map(knownTags);
+              next.set(matchedId, { ...existing, label: info.label, description: info.description });
+              knownTags = new Map([...next].sort((a, b) => a[0] - b[0]));
+              appendLog(`[Places Updated] Place ${matchedId} assigned label "${info.label}"`);
+            }
+          }
+        }).catch((err) => {
+          console.warn('[Tesseract OCR] Error:', err);
+          appendLog(`[OCR Error] ${err}`);
+          labeledOcrBusy = false;
+        });
       }
-    } else {
-      shelfTagCam = null;
     }
+
+    // ── Onboard-camera dual nav tag card tracking ──
+    // Tracks the card center between Marker 200 (left) and Marker 201 (right).
+    // If only one marker is visible, commands a rotational bias toward the missing marker
+    // so the base turns to bring BOTH markers into the camera frame.
+    let cardCamPose: [number, number, number, number] | null = null;
+    if (leftTag && rightTag) {
+      const mpL = solvePnpMarkerPose(cv, leftTag, navTagMm, camW, camH, intr);
+      const mpR = solvePnpMarkerPose(cv, rightTag, navTagMm, camW, camH, intr);
+      if (mpL && mpR) {
+        const sqL = Math.atan2(mpL.R[2], -mpL.R[8]);
+        const sqR = Math.atan2(mpR.R[2], -mpR.R[8]);
+        cardCamPose = [
+          (mpL.t[0] + mpR.t[0]) / 2000,
+          (mpL.t[1] + mpR.t[1]) / 2000,
+          (mpL.t[2] + mpR.t[2]) / 2000,
+          (sqL + sqR) / 2,
+        ];
+      } else if (mpL) {
+        const sq = Math.atan2(mpL.R[2], -mpL.R[8]);
+        cardCamPose = [mpL.t[0] / 1000 + 0.055, mpL.t[1] / 1000, mpL.t[2] / 1000, sq];
+      } else if (mpR) {
+        const sq = Math.atan2(mpR.R[2], -mpR.R[8]);
+        cardCamPose = [mpR.t[0] / 1000 - 0.055, mpR.t[1] / 1000, mpR.t[2] / 1000, sq];
+      }
+    } else if (leftTag) {
+      // Saw left tag (200) only -> rotate right to bring tag 201 into frame
+      const mpL = solvePnpMarkerPose(cv, leftTag, navTagMm, camW, camH, intr);
+      if (mpL) {
+        const sq = Math.atan2(mpL.R[2], -mpL.R[8]);
+        cardCamPose = [mpL.t[0] / 1000 + 0.07, mpL.t[1] / 1000, mpL.t[2] / 1000, sq + 0.25];
+      }
+    } else if (rightTag) {
+      // Saw right tag (201) only -> rotate left to bring tag 200 into frame
+      const mpR = solvePnpMarkerPose(cv, rightTag, navTagMm, camW, camH, intr);
+      if (mpR) {
+        const sq = Math.atan2(mpR.R[2], -mpR.R[8]);
+        cardCamPose = [mpR.t[0] / 1000 - 0.07, mpR.t[1] / 1000, mpR.t[2] / 1000, sq - 0.25];
+      }
+    }
+    shelfTagCam = cardCamPose;
 
     // Board pose (camera→board) from border tags, then each block via solvePnP.
     const pose = boardPoseFromTags(cv, corners, tagCentresMm, TAG_MM, intr, camW, camH);
@@ -3402,6 +3676,113 @@
       pickBlock = interiorToSim(d[0], d[1]);
       setBlockMocap(pickBlock, d[2]);
     }
+  }
+
+  let latestCorners = new Map<number, Corners>();
+
+  function forceScanOcr(): Promise<LabeledTagInfo | null> {
+    return new Promise((resolve) => {
+      lastLabeledOcr = null;
+      if (!cv || !detector || !session) {
+        appendLog('[Scan] Sim/Detector not ready.');
+        resolve(null);
+        return;
+      }
+
+      const remote = remoteCams.canvas(REMOTE_BASE_CAM);
+      const live = !!camStream || !!remote;
+      const source: CanvasImageSource | null = remote ?? (camStream ? video : (povCanvas ?? null));
+      if (!source) {
+        appendLog('[Scan] No active camera image source.');
+        resolve(null);
+        return;
+      }
+      if (!ensureGrab(live) || !grabCtx || !srcMat || !grayMat) {
+        appendLog('[Scan] Frame grab buffer not ready.');
+        resolve(null);
+        return;
+      }
+
+      // Grab a FRESH frame directly from the camera canvas/video
+      const { width, height } = grabCtx.canvas;
+      grabCtx.drawImage(source, 0, 0, width, height);
+      const frame = grabCtx.getImageData(0, 0, width, height);
+      srcMat.data.set(frame.data);
+      cv.cvtColor(srcMat, grayMat, cv.COLOR_RGBA2GRAY);
+
+      // Detect markers on the fresh frame
+      const corners = detectMarkers(cv, detector, grayMat);
+      latestCorners = corners;
+      const ids = [...corners.keys()].sort((a, b) => a - b);
+      const c200 = corners.get(LEFT_NAV_ID);
+      const c201 = corners.get(RIGHT_NAV_ID);
+
+      appendLog(`[Scan] Photo (${width}x${height}) captured. Detected markers: [${ids.join(', ')}]`);
+
+      if (!c200 || !c201) {
+        appendLog(`[Scan] Cannot extract: Missing ${!c200 ? 'Tag 200' : ''} ${!c201 ? 'Tag 201' : ''}.`);
+        resolve(null);
+        return;
+      }
+
+      labeledOcrBusy = true;
+      extractLabeledTag(cv, corners, grayMat).then((info) => {
+        labeledOcrBusy = false;
+        if (!info) {
+          appendLog('[Scan] Homography extraction returned null.');
+          resolve(null);
+          return;
+        }
+        lastOcrFullImgUrl = info.fullDataUrl || '';
+        lastOcrLabelImgUrl = info.labelDataUrl || '';
+        lastOcrDescImgUrl = info.descDataUrl || '';
+        lastLabeledOcr = { label: info.label, ts: performance.now() };
+        lastOcrText = info.label;
+        lastOcrDesc = info.description;
+
+        if (info.label) {
+          appendLog(`[OCR Success] Label: "${info.label}" (${info.confidence}%), Desc: "${info.description}"`);
+        } else {
+          appendLog(`[OCR Raw] No clean label. Raw text: "${info.rawLabelText || '(empty)'}", Desc: "${info.rawDescText || '(empty)'}"`);
+        }
+
+        // Match station in 3D space and update knownTags
+        const leftTag = c200;
+        const curIntr = live ? intrinsics : (povView ? povIntrinsics(povView.fovDeg, camW, camH) : null);
+        if (curIntr) {
+          const mp = solvePnpMarkerPose(cv, leftTag, navTagMm, camW, camH, curIntr);
+          if (mp) {
+            const cam = cameraWorld();
+            const pw = apply3(cam.R, [mp.t[0] / 1000, mp.t[1] / 1000, mp.t[2] / 1000]);
+            const tagWx = pw[0] + cam.t[0];
+            const tagWy = pw[1] + cam.t[1];
+
+            let matchedId: number | null = null;
+            for (const [id, t] of knownTags) {
+              if (Math.hypot(t.x - tagWx, t.y - tagWy) < 0.45) {
+                matchedId = id;
+                break;
+              }
+            }
+            if (matchedId !== null) {
+              const existing = knownTags.get(matchedId);
+              if (existing) {
+                const next = new Map(knownTags);
+                next.set(matchedId, { ...existing, label: info.label, description: info.description });
+                knownTags = new Map([...next].sort((a, b) => a[0] - b[0]));
+                appendLog(`[Places Updated] Place ${matchedId} assigned label "${info.label}"`);
+              }
+            }
+          }
+        }
+        resolve(info);
+      }).catch((err) => {
+        console.warn('[Tesseract OCR] Manual error:', err);
+        appendLog(`[OCR Error] ${err}`);
+        labeledOcrBusy = false;
+        resolve(null);
+      });
+    });
   }
 
   function onStageChange(next: Stage, useScanned = false) {
@@ -3468,8 +3849,8 @@
     try {
       await robot.connectRemote(opts);
       remoteCams.clear();
-      remoteBaseLive = false;
-      remoteArmLive = false;
+      remoteBaseLive = true;
+      remoteArmLive = (robot.info?.cameras ?? 0) >= 2;
       robot.onVideoFrame((cam, jpeg) => void remoteCams.push(cam, jpeg));
       await afterConnect();
     } catch (e) {
@@ -3558,47 +3939,52 @@
   // untouched — use "Reset MuJoCo position" to snap it once parked.
   function maybeNavigate() {
     if (!navigating) return;
-    const c = shelfTagCam;
-    if (!c) {
-      // Not looking at it. Steer by memory instead of stalling — and steer to the
-      // spot square in FRONT of the tag's face, not merely to the tag. Driving at
-      // the tag itself parks you wherever you happened to approach from, which is
-      // no use for opening a drawer or reaching onto a surface.
-      const known = knownTags.get(navTagId);
-      if (!known) {
-        zeroBaseVel();
-        return;
-      }
-      const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
-      const norm = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
-      // Standoff point: out along the tag's own facing direction.
-      const gx = known.x + Math.cos(known.faceYaw) * navStandoff;
-      const gy = known.y + Math.sin(known.faceYaw) * navStandoff;
-      const dx = gx - robotX, dy = gy - robotY;
-      const dist = Math.hypot(dx, dy);
-      const yaw = (robotYawDeg * Math.PI) / 180;
-      // Facing the tag means heading opposite its outward normal.
-      const wantYaw = known.faceYaw + Math.PI;
+    const known = knownTags.get(navTagId);
+    if (!known) {
+      zeroBaseVel();
+      return;
+    }
 
-      // 15 mm, not 50. Close in, the tag is outside the onboard camera's frame and
-      // this dead-reckoned branch is the one actually driving — so its tolerance
-      // *is* the standoff accuracy. At 50 mm, asking for 0.12 m parked at 0.17 m.
-      if (dist > 0.015) {
-        const rel = norm(Math.atan2(dy, dx) - yaw);
-        baseVel.turn = clamp1(1.5 * rel);
-        const p = bodyToPrimitives(Math.abs(rel) < 0.35 ? 0.6 : 0, 0);
+    const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
+    const norm = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+    // Target standoff point in world coordinates
+    const gx = known.x + Math.cos(known.faceYaw) * navStandoff;
+    const gy = known.y + Math.sin(known.faceYaw) * navStandoff;
+    const dx = gx - robotX, dy = gy - robotY;
+    const distToStandoff = Math.hypot(dx, dy);
+    const yaw = (robotYawDeg * Math.PI) / 180;
+    const wantYaw = known.faceYaw + Math.PI;
+    const relYaw = norm(wantYaw - yaw);
+
+    // Visual servoing is only valid when near the targeted station and facing it
+    const isCloseToTarget = distToStandoff < 0.40 && Math.abs(relYaw) < 0.65;
+
+    if (!isCloseToTarget || !shelfTagCam) {
+      if (distToStandoff > 0.025) {
+        const headingToGoal = Math.atan2(dy, dx);
+        const headingErr = norm(headingToGoal - yaw);
+        baseVel.turn = clamp1(1.8 * headingErr);
+        const p = bodyToPrimitives(Math.abs(headingErr) < 0.35 ? 0.6 : 0, 0);
         baseVel.fwd = p.fwd;
         baseVel.bl = p.bl;
         baseVel.br = p.br;
         return;
       }
-      // At the standoff point — turn on the spot until square with the face.
-      const rel = norm(wantYaw - yaw);
-      if (Math.abs(rel) > 0.06) {
+      if (Math.abs(relYaw) > 0.05) {
         baseVel.fwd = 0;
         baseVel.bl = 0;
         baseVel.br = 0;
-        baseVel.turn = clamp1(1.5 * rel);
+        baseVel.turn = clamp1(1.8 * relYaw);
+        return;
+      }
+      const leftSeen = visibleNavTags.includes(LEFT_NAV_ID);
+      const rightSeen = visibleNavTags.includes(RIGHT_NAV_ID);
+      if (!leftSeen && !rightSeen) {
+        baseVel.fwd = 0;
+        baseVel.bl = 0;
+        baseVel.br = 0;
+        baseVel.turn = clamp1(0.25 * Math.sin(performance.now() / 600));
         return;
       }
       navigating = false;
@@ -3607,31 +3993,33 @@
       baseLink.stopWheels().catch(() => {});
       return;
     }
-    const fErr = c[2] - navCamDepth; // +ve: too far, drive forward
-    const lat = c[0]; // camera +x: tag to the right
-    const sq = c[3]; // off-square angle of the shelf face (0 = head-on)
-    // Tight enough that "arrived" means the standoff rather than 30 mm short of
-    // it, but not tighter than the base can actually hold: at 12 mm it could not
-    // settle, so navigation never ended, and everything gated on `navigating` —
-    // including Run everything — stayed disabled forever.
-    const zTol = 0.02, xTol = 0.025, sqTol = 0.06; // ~3.5° square tolerance
-    if (Math.abs(fErr) < zTol && Math.abs(lat) < xTol && Math.abs(sq) < sqTol) {
+
+    const c = shelfTagCam;
+    const fErr = c[2] - navCamDepth;
+    const lat = c[0];
+    const sq = c[3];
+    const zTol = 0.03, xTol = 0.025, sqTol = 0.06;
+    const bothSeen = Boolean(visibleNavTags.includes(LEFT_NAV_ID) && visibleNavTags.includes(RIGHT_NAV_ID));
+
+    if (bothSeen && Math.abs(fErr) < zTol && Math.abs(lat) < xTol && Math.abs(sq) < sqTol) {
       navigating = false;
-      atTag = navTagId; // arrived — offer what you can do here
+      atTag = navTagId;
       zeroBaseVel();
       baseLink.stopWheels().catch(() => {});
+      if (exploring) {
+        appendLog('[Navigation] Arrived at scanning standoff (0.34m). Settling...');
+      } else {
+        appendLog('[Navigation] Arrived at working position (0.18m). Ready to pick.');
+      }
       return;
     }
-    const clamp = (v: number) => Math.max(-1, Math.min(1, v));
-    // Desired body velocity: centre the tag (vy left), close the distance once
-    // lined up (vx), square up to the shelf face (wz).
-    const vx = Math.abs(lat) < 0.1 && Math.abs(sq) < 0.2 ? clamp(2.5 * fErr) : 0;
-    const vy = clamp(-2.5 * lat); // tag on the right → move right (vy negative)
-    const p = bodyToPrimitives(vx, vy); // spread across the 3 drive directions
+    const vx = Math.abs(lat) < 0.08 && Math.abs(sq) < 0.15 ? clamp1(2.5 * fErr) : 0;
+    const vy = clamp1(-2.5 * lat);
+    const p = bodyToPrimitives(vx, vy);
     baseVel.fwd = p.fwd;
     baseVel.bl = p.bl;
     baseVel.br = p.br;
-    baseVel.turn = clamp(1.2 * navSquareSign * sq);
+    baseVel.turn = clamp1(1.6 * navSquareSign * sq);
   }
 
   function toggleNavigate() {
@@ -3646,6 +4034,7 @@
   // Start driving toward a specific detected nav tag (from its auto-offered button).
   function driveToTag(id: number) {
     navTagId = id;
+    navStandoff = WORK_STANDOFF; // 0.18m close standoff for picking reach
     baseLink.error = null;
     if (!navigating) navigating = true;
   }
@@ -3659,15 +4048,35 @@
    * good enough to point the robot roughly the right way, after which the visual
    * navigation closes the loop on the tag itself.
    */
-  function rememberTag(id: number, pWorld: number[], nWorld: number[]) {
+  function rememberTag(id: number, pWorld: number[], nWorld: number[], label?: string, description?: string) {
     if (id < NAV_TAG_LO || id > NAV_TAG_HI) return; // only nav fiducials, for now
     const next = new Map(knownTags);
-    next.set(id, {
-      id,
+
+    // Spatial clustering: match against existing station within 0.45 m
+    let matchedKey: number | null = null;
+    for (const [key, existing] of next) {
+      if (Math.hypot(existing.x - pWorld[0], existing.y - pWorld[1]) < 0.45) {
+        matchedKey = key;
+        break;
+      }
+    }
+
+    // Number stations cleanly as 1, 2, 3...
+    const resolvedId = matchedKey !== null ? matchedKey : (next.size ? Math.max(...next.keys()) + 1 : 1);
+    const existing = next.get(resolvedId);
+
+    // Resolved label: ONLY set from real OCR text (no hardcoded sim values)
+    const resolvedLabel = label || existing?.label || '';
+    const resolvedDesc = description || existing?.description || '';
+
+    next.set(resolvedId, {
+      id: resolvedId,
       x: pWorld[0],
       y: pWorld[1],
       z: pWorld[2],
       faceYaw: Math.atan2(nWorld[1], nWorld[0]),
+      label: resolvedLabel,
+      description: resolvedDesc,
     });
     knownTags = new Map([...next].sort((a, b) => a[0] - b[0]));
   }
@@ -3717,11 +4126,46 @@
     return parts.join(', ');
   }
 
+  async function returnToPose(gx: number, gy: number, wantYawDeg: number): Promise<void> {
+    const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
+    const norm = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+    const t0 = performance.now();
+
+    while (!exploreCancel && performance.now() - t0 < 18000) {
+      const dx = gx - robotX;
+      const dy = gy - robotY;
+      const dist = Math.hypot(dx, dy);
+      const yaw = (robotYawDeg * Math.PI) / 180;
+      const wantYaw = (wantYawDeg * Math.PI) / 180;
+
+      if (dist > 0.03) {
+        const headingToGoal = Math.atan2(dy, dx);
+        const rel = norm(headingToGoal - yaw);
+        baseVel.turn = clamp1(1.5 * rel);
+        const p = bodyToPrimitives(Math.abs(rel) < 0.4 ? 0.6 : 0, 0);
+        baseVel.fwd = p.fwd;
+        baseVel.bl = p.bl;
+        baseVel.br = p.br;
+      } else {
+        const relYaw = norm(wantYaw - yaw);
+        if (Math.abs(relYaw) <= 0.05) {
+          break; // Arrived and oriented
+        }
+        baseVel.fwd = 0;
+        baseVel.bl = 0;
+        baseVel.br = 0;
+        baseVel.turn = clamp1(1.5 * relYaw);
+      }
+      await delay(50);
+    }
+    zeroBaseVel();
+  }
+
   /**
-   * Turn a full circle, remembering every nav tag that comes into view. Progress
-   * is tracked against the simulated yaw, which `applyBaseMotion` integrates from
-   * the same drive command we're issuing — so it measures the turn we asked for,
-   * not one we've confirmed. Good enough to sweep the room once.
+   * Exploration:
+   * 1. 360° Sweep to discover all nav tag stations around the room.
+   * 2. Automatically visits each discovered station at scanning standoff (0.34m) and reads the OCR label.
+   * 3. Drives back to the initial starting pose in the center.
    */
   async function explore() {
     if (exploring || !hasBase) return;
@@ -3729,29 +4173,71 @@
     exploreCancel = false;
     exploreProgress = 0;
     atTag = null;
-    // Park the arm before the base moves — a raised arm swinging round with the
-    // base is the one genuinely dangerous thing this routine could do.
     armRest = true;
+    forgetTags(); // Clear remembered places so fresh discovery populates them live
+    appendLog('[Explore] Starting Phase 1: 360° discovery sweep...');
     await settleAndMeasure();
-    // Accumulate the turn frame by frame rather than comparing against the start
-    // heading. Yaw wraps at ±180, so the difference jumps by a full turn as it
-    // crosses — which read as "swept 360°" after a fraction of a rotation and
-    // ended the sweep having seen only the stations in that arc.
+
+    const startX = robotX;
+    const startY = robotY;
+    const startYaw = robotYawDeg;
+
     let prevYaw = robotYawDeg;
     let swept = 0;
     const t0 = performance.now();
     try {
+      // ── Phase 1: 360° Sweep (smooth turn at 0.5 speed for reliable detection) ──
       while (!exploreCancel) {
-        const step = ((robotYawDeg - prevYaw + 540) % 360) - 180; // shortest signed delta
+        const step = ((robotYawDeg - prevYaw + 540) % 360) - 180;
         swept += Math.abs(step);
         prevYaw = robotYawDeg;
-        exploreProgress = Math.min(1, swept / 360);
+        exploreProgress = Math.min(0.35, (swept / 360) * 0.35);
         if (swept >= 360) break;
-        if (performance.now() - t0 > 60000) break; // never spin forever
-        baseVel.turn = 1; // set directly — turnRobot defers to us while exploring
-        await delay(80); // detection runs in the render loop as we turn
+        if (performance.now() - t0 > 60000) break;
+        baseVel.turn = 0.5;
+        await delay(60);
       }
+      zeroBaseVel();
+      await delay(400);
+
+      if (exploreCancel) return;
+
+      const stationList = [...knownTags.values()];
+      appendLog(`[Explore] Discovery sweep complete. Found ${stationList.length} station(s).`);
+
+      // ── Phase 2: Visit each station at scanning standoff (0.34m) to read labels ──
+      if (stationList.length > 0) {
+        appendLog('[Explore] Starting Phase 2: Visiting stations to read labels...');
+        for (let i = 0; i < stationList.length; i++) {
+          if (exploreCancel) return;
+          const st = stationList[i];
+          appendLog(`[Explore] Navigating to Station ${st.id} (${i + 1}/${stationList.length})...`);
+          navStandoff = SCAN_STANDOFF;
+          navTagId = st.id;
+          navigating = true;
+
+          const navT0 = performance.now();
+          while (navigating && !exploreCancel && performance.now() - navT0 < 15000) {
+            exploreProgress = 0.35 + (0.50 * (i + 0.5) / stationList.length);
+            await delay(100);
+          }
+          zeroBaseVel();
+          await delay(400); // settle
+
+          if (!exploreCancel) {
+            appendLog(`[Explore] Reading Station ${st.id} label...`);
+            await forceScanOcr();
+            await delay(300);
+          }
+        }
+      }
+
+      // ── Phase 3: Return to center starting pose ──
       if (!exploreCancel) {
+        appendLog('[Explore] Starting Phase 3: Returning to central home position...');
+        exploreProgress = 0.90;
+        await returnToPose(startX, startY, startYaw);
+        appendLog('[Explore] Exploration complete! All stations discovered, read, and returned home.');
         hasExplored = true;
       }
     } finally {
@@ -3759,6 +4245,7 @@
       baseLink.stopWheels().catch(() => {});
       exploring = false;
       exploreProgress = 0;
+      navigating = false;
     }
   }
 
@@ -4203,7 +4690,8 @@
     holdingItem,
     knownStations: [...knownTags.values()].map((t) => ({
       id: t.id,
-      label: `Tag ${t.id}`,
+      label: t.label || `Tag ${t.id}`,
+      description: t.description,
       x: t.x,
       y: t.y,
     })),
@@ -4213,13 +4701,48 @@
   });
 
   const aiCallbacks: RobotActionCallbacks = {
-    onNavigate: async (stationId: number) => {
+    onNavigate: async (target: number | string) => {
       if (!hasBase) throw new Error('Robot base is not supported in current mode');
-      if (!knownTags.has(stationId)) {
-        throw new Error(`Station ${stationId} has not been discovered yet. Please run Explore first.`);
+      let targetTagId: number | null = null;
+      let targetLabel: string = '';
+
+      if (typeof target === 'number') {
+        if (knownTags.has(target)) {
+          targetTagId = target;
+          targetLabel = knownTags.get(target)?.label || `Tag ${target}`;
+        }
+      } else if (typeof target === 'string') {
+        const query = target.trim().toLowerCase();
+        const num = parseInt(query, 10);
+        if (!isNaN(num) && knownTags.has(num)) {
+          targetTagId = num;
+          targetLabel = knownTags.get(num)?.label || `Tag ${num}`;
+        } else {
+          for (const [id, t] of knownTags) {
+            if (t.label && t.label.toLowerCase().includes(query)) {
+              targetTagId = id;
+              targetLabel = t.label;
+              break;
+            }
+          }
+          if (targetTagId === null) {
+            for (const [id, t] of knownTags) {
+              const def = STATIONS.find((s) => s.navTag === id);
+              if (def && (def.prop.toLowerCase().includes(query) || (def.label && def.label.toLowerCase().includes(query)))) {
+                targetTagId = id;
+                targetLabel = t.label || def.label || `Tag ${id}`;
+                break;
+              }
+            }
+          }
+        }
       }
-      driveToTag(stationId);
-      return `Navigating to station ${stationId}`;
+
+      if (targetTagId === null) {
+        throw new Error(`Station "${target}" has not been discovered yet. Please run Explore first.`);
+      }
+      driveToTag(targetTagId);
+      return `Navigating to station ${targetLabel}`;
     },
     onPickTag: async (tagId?: number) => {
       const targetTag = tagId || (armDetectedTags.length ? armDetectedTags[0] : null);
@@ -4318,7 +4841,7 @@
       </div>
       <div class="cell">
         <span class="celllabel">
-          Base cam{remoteBaseLive ? ' (robot)' : camStream ? '' : ' (sim)'} · {baseCamMarkerSummary()}
+          Base cam{remoteBaseLive ? (activeRemoteCam === REMOTE_BASE_CAM ? ' (robot · live)' : ' (robot · paused)') : camStream ? '' : ' (sim)'} · {baseCamMarkerSummary()}
         </span>
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
@@ -4327,8 +4850,8 @@
           muted
           class:hidden={!camStream || remoteBaseLive}
         ></video>
-        {#if remoteBaseLive}<canvas bind:this={remoteBaseCanvas}></canvas>
-        {:else if !camStream}<canvas bind:this={povCanvas}></canvas>{/if}
+        <canvas bind:this={remoteBaseCanvas} class:hidden={!remoteBaseLive}></canvas>
+        {#if !camStream && !remoteBaseLive}<canvas bind:this={povCanvas}></canvas>{/if}
         <!-- Local-webcam picker is meaningless while the robot's own camera is
              feeding this panel; the frames come from the Pi, not this machine. -->
         {#if remoteBaseLive || remoteArmLive}
@@ -4359,7 +4882,7 @@
       </div>
       <div class="cell">
         <span class="celllabel">
-          Arm cam{remoteArmLive ? ' (robot)' : armCamStream ? '' : ' (sim)'}
+          Arm cam{remoteArmLive ? (activeRemoteCam === REMOTE_ARM_CAM ? ' (robot · live)' : ' (robot · paused)') : armCamStream ? '' : ' (sim)'}
         </span>
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
@@ -4368,15 +4891,15 @@
           muted
           class:hidden={!armCamStream || remoteArmLive}
         ></video>
-        {#if remoteArmLive}<canvas bind:this={remoteArmCanvas}></canvas>
-        {:else if !armCamStream}<canvas bind:this={armPovCanvas}></canvas>{/if}
+        <canvas bind:this={remoteArmCanvas} class:hidden={!remoteArmLive}></canvas>
+        {#if !armCamStream && !remoteArmLive}<canvas bind:this={armPovCanvas}></canvas>{/if}
         {#if remoteBaseLive || remoteArmLive}
           <div class="camctl">
             <button
               class={activeRemoteCam === REMOTE_ARM_CAM ? "primary" : "subtle"}
               onclick={() => selectRemoteCamera(REMOTE_ARM_CAM)}
             >
-              {activeRemoteCam === REMOTE_ARM_CAM ? '● Live' : '○ Switch to Arm'}
+              {activeRemoteCam === REMOTE_ARM_CAM ? '● Live' : (robot.info && robot.info.cameras < 2 ? '○ Arm (1 Cam on Robot)' : '○ Switch to Arm')}
             </button>
           </div>
         {:else if !remoteArmLive}
@@ -4522,13 +5045,35 @@
             <button class="logactionbtn close" onclick={() => (logOpen = false)}>✕</button>
           </div>
         </div>
+
+        {#if lastOcrFullImgUrl || lastOcrLabelImgUrl || lastOcrDescImgUrl}
+          <div class="ocr-log-previews">
+            {#if lastOcrFullImgUrl}
+              <div class="ocr-preview-item">
+                <span class="preview-label">Full Center Patch:</span>
+                <img src={lastOcrFullImgUrl} alt="Full Center Region" class="ocr-full-thumb" />
+              </div>
+            {/if}
+            <div class="ocr-preview-item">
+              <span class="preview-label">Label (Top):</span>
+              {#if lastOcrLabelImgUrl}<img src={lastOcrLabelImgUrl} alt="Warped Label" class="ocr-thumb" />{/if}
+              <strong>"{lastOcrText || '(none)'}"</strong>
+            </div>
+            <div class="ocr-preview-item">
+              <span class="preview-label">Desc (Bottom):</span>
+              {#if lastOcrDescImgUrl}<img src={lastOcrDescImgUrl} alt="Warped Desc" class="ocr-thumb" />{/if}
+              <span>"{lastOcrDesc || '(none)'}"</span>
+            </div>
+          </div>
+        {/if}
+
         <pre class="logtext">{pickLog.length ? pickLog.join('\n') : 'nothing yet'}</pre>
       </div>
     {/if}
     <!-- Explore: sweep the surroundings and remember every nav tag seen, so the
          places worth going to become buttons rather than numbers to type in.
-         Hidden once exploration is complete. -->
-    {#if !hasExplored && !knownTags.size}
+         Shown by default on startup until exploration is run. -->
+    {#if !hasExplored}
       <div class="explore-section">
         <div class="explore-row">
           <button
@@ -4546,28 +5091,20 @@
           <p class="explore-hint">explore the environment to discover places &amp; objects</p>
         {/if}
       </div>
-    {:else if exploring}
-      <div class="explore-section">
-        <div class="explore-row">
-          <button class="primary big explore-btn" disabled>
-            Exploring… {Math.round(exploreProgress * 100)}%
-          </button>
-          <button onclick={() => (exploreCancel = true)}>Stop</button>
-        </div>
-      </div>
     {/if}
 
     {#if runStep}
       <div class="status {runningAll ? 'warn' : 'ok'}" data-run-step>{runStep}</div>
     {/if}
 
-    {#if knownTags.size}
+    {#if hasExplored || exploring || knownTags.size > 0}
       <h2>Places</h2>
       <div class="places-table">
         {#each [...knownTags.values()] as t (t.id)}
           <div class="place-row-container">
             <div class="placerow">
-              <strong class="tag-label">Tag {t.id}</strong>
+              <strong class="tag-label">{t.label || `Place ${t.id}`}</strong>
+              {#if t.description}<span class="hint desc">{t.description}</span>{/if}
               <span class="hint">{placeBearing(t)}</span>
               <button
                 class="place-btn"
@@ -4834,10 +5371,9 @@
         <details class="realbox">
           <summary><span class="sumhead">Navigation tuning</span></summary>
           <p class="hint">
-            Point the onboard camera at a nav tag (200 = shelf; 201, 202… = the extra station
-            tags from <em>make_nav_tags.py</em>). Any nav fiducial ({NAV_TAG_LO}–{NAV_TAG_HI}) it
-            spots gets its own button below — click one to drive to it (approach to the standoff and
-            square up); once parked, <em>Reset MuJoCo position</em> snaps the sim robot to the
+            Point the onboard camera at a labeled nav tag (a card with markers 200 &amp; 201
+            flanking a label). The app reads the label via OCR and offers it as a drive target.
+            Once parked, <em>Reset MuJoCo position</em> snaps the sim robot to the
             matching standoff in front of drawer {shelfSel + 1}.
           </p>
           <div class="pickrow">
@@ -5123,14 +5659,19 @@
     position: relative;
     overflow: hidden;
     background: #0e1013;
-    display: flex;
+    display: block;
   }
   .cell.main {
     grid-column: 1 / -1;
   }
-  .cell video.hidden { display: none; }
+  .cell canvas.hidden,
+  .cell video.hidden {
+    display: none !important;
+  }
   .cell canvas,
   .cell video {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     display: block;
@@ -5280,6 +5821,49 @@
     font-size: 0.7rem;
     line-height: 1.4;
     white-space: pre;
+  }
+  .ocr-log-previews {
+    display: flex;
+    gap: 0.8rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--surface, #ffffff);
+    border-radius: 4px;
+    margin-bottom: 0.4rem;
+    border: 1px solid var(--line-soft, #d1d5db);
+  }
+  .ocr-preview-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.7rem;
+  }
+  .preview-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    opacity: 0.75;
+  }
+  .ocr-thumb {
+    max-height: 44px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    object-fit: contain;
+  }
+  .ocr-full-thumb {
+    max-height: 52px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    object-fit: contain;
+  }
+  .places-actions-row {
+    display: flex;
+    margin-top: 0.4rem;
+    margin-bottom: 0.4rem;
+  }
+  .rescan-btn {
+    font-size: 0.75rem;
+    padding: 0.3rem 0.6rem;
   }
   .explore-section {
     display: flex;

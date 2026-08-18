@@ -85,7 +85,7 @@ export type StreamMessage =
  * camera settings are wrong, which is worth noticing rather than papering over.
  */
 export const VIDEO_HEADER_BYTES = 5;
-export const MAX_VIDEO_FRAME = 60_000;
+export const MAX_VIDEO_FRAME = 250_000;
 
 export function encodeVideoFrame(camera: number, seq: number, jpeg: Uint8Array): ArrayBuffer {
   const out = new Uint8Array(VIDEO_HEADER_BYTES + jpeg.length);

@@ -10,14 +10,14 @@ export interface RobotStateContext {
   activeNavTag: number | null;
   atTag: number | null;
   holdingItem: boolean;
-  knownStations: Array<{ id: number; label: string; prop?: string; x: number; y: number }>;
+  knownStations: Array<{ id: number; label: string; description?: string; prop?: string; x: number; y: number }>;
   armDetectedTags: number[];
   baseDetectedTags: number[];
   activeCamera: 'base' | 'arm';
 }
 
 export interface RobotActionCallbacks {
-  onNavigate?: (stationId: number) => Promise<string> | string | void;
+  onNavigate?: (target: number | string) => Promise<string> | string | void;
   onPickTag?: (tagId?: number) => Promise<string> | string | void;
   onExplore?: () => Promise<string> | string | void;
   onLookForItems?: () => Promise<string> | string | void;
@@ -55,16 +55,19 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'navigate_to_station',
-      description: 'Drive the mobile robot base to a known station / pedestal by its tag ID.',
+      description: 'Drive the mobile robot base to a known station / pedestal by its label name (e.g. "APPLE", "BANANA", "BASKET", "PLANT") or tag ID.',
       parameters: {
         type: 'object',
         properties: {
+          station_label: {
+            type: 'string',
+            description: 'The label name of the station to navigate to (e.g. "Apple", "Banana", "Basket", "Plant", "Bottle", "Block", "Orange").',
+          },
           station_id: {
             type: 'number',
-            description: 'The tag ID of the station to navigate to (e.g. 200, 201, 202, 203, 204, 205, 206).',
+            description: 'Optional numeric tag ID if navigating directly by tag (e.g. 200, 201).',
           },
         },
-        required: ['station_id'],
       },
     },
   },

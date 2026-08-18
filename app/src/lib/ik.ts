@@ -119,17 +119,25 @@ export class IKSolver {
    * view (a by-reference typed array — no per-call C++ handle allocation).
    */
   sitePosition(): [number, number, number] {
-    const sx = this.data.site_xpos as Float64Array;
-    const i = this.siteId * 3;
-    return [sx[i], sx[i + 1], sx[i + 2]];
+    try {
+      const sx = this.data.site_xpos as Float64Array;
+      const i = this.siteId * 3;
+      return [sx[i], sx[i + 1], sx[i + 2]];
+    } catch {
+      return [0, 0, 0];
+    }
   }
 
   /** Current world rotation of the driven site (row-major 3×3; columns are the
    *  site's local x/y/z axes expressed in world). Read from `site_xmat`. */
   siteRotation(): number[] {
-    const sm = this.data.site_xmat as Float64Array;
-    const i = this.siteId * 9;
-    return Array.from(sm.subarray(i, i + 9));
+    try {
+      const sm = this.data.site_xmat as Float64Array;
+      const i = this.siteId * 9;
+      return Array.from(sm.subarray(i, i + 9));
+    } catch {
+      return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    }
   }
 
   /**
