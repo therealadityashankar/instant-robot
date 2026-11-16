@@ -172,3 +172,15 @@ than a flat-sided one. That needs:
 Both are static geoms on their pedestals at the moment, so they can be found and
 approached but not lifted. Making them free bodies with a `freejoint`, the way
 the block already is, is what turns them into pick targets.
+
+---
+
+## 📜 Third-Party Credits & Attributions
+
+The 3D low-poly animal mascots used on the Stop Stands are licensed under Creative Commons Attribution 3.0 Unported ([CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/)):
+
+- **Fox v2**: by [Jake Blakeley](https://poly.pizza/m/0-NaVqxdfRu) via Poly Pizza ([CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/)).
+- **Rabbit**: by [Poly by Google](https://poly.pizza/m/dyeBDJxhDwP) via Poly Pizza ([CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/)).
+
+See [LICENSES.md](LICENSES.md) for full license details.
+

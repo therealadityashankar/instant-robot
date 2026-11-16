@@ -18,6 +18,7 @@ const MAX_SIGNAL_LIFETIME_MS = 30 * 60 * 1000;
 export class SignalRoom {
   private state: DurableObjectState;
   private env: { BUDGET: DurableObjectNamespace };
+  private roles = new WeakMap<WebSocket, Role>();
 
   constructor(state: DurableObjectState, env: { BUDGET: DurableObjectNamespace }) {
     this.state = state;
@@ -45,29 +46,67 @@ export class SignalRoom {
     return (await this.state.storage.get<string>('room')) ?? '';
   }
 
+  private getRole(ws: WebSocket): Role | null {
+    const mem = this.roles.get(ws);
+    if (mem) return mem;
+    try {
+      const att = ws.deserializeAttachment() as WsAttachment | null;
+      if (att?.role === 'robot' || att?.role === 'browser') {
+        this.roles.set(ws, att.role);
+        return att.role;
+      }
+    } catch {
+      /* ignore */
+    }
+    const tags = this.state.getTags(ws);
+    if (tags && tags.includes('robot')) {
+      this.roles.set(ws, 'robot');
+      return 'robot';
+    }
+    if (tags && tags.includes('browser')) {
+      this.roles.set(ws, 'browser');
+      return 'browser';
+    }
+    return null;
+  }
+
   private peers(): { ws: WebSocket; role: Role }[] {
-    return this.state.getWebSockets().map((ws) => ({
-      ws,
-      role: (this.state.getTags(ws)[0] as Role) ?? 'browser',
-    }));
+    const out: { ws: WebSocket; role: Role }[] = [];
+    for (const ws of this.state.getWebSockets()) {
+      if (ws.readyState === 1) {
+        const r = this.getRole(ws);
+        if (r) out.push({ ws, role: r });
+      }
+    }
+    return out;
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const role = url.searchParams.get('role') === 'robot' ? 'robot' : 'browser';
+    const role: Role = url.searchParams.get('role') === 'robot' ? 'robot' : 'browser';
+    const otherRole: Role = role === 'robot' ? 'browser' : 'robot';
 
-    const existing = this.peers();
-    if (existing.some((p) => p.role === role)) {
-      return new Response(`a ${role} is already connected to this room`, { status: 409 });
+    // Gracefully replace any stale socket of the same role (e.g. browser refresh or robot bridge reconnect)
+    for (const ws of this.state.getWebSockets()) {
+      if (ws.readyState === 1 && this.getRole(ws) === role) {
+        try {
+          ws.close(1000, `replaced by new ${role} connection`);
+        } catch {
+          /* ignore */
+        }
+      }
     }
-    if (existing.length >= 2) {
-      return new Response('room full', { status: 409 });
-    }
+
+    const otherPeer = this.state
+      .getWebSockets()
+      .find((ws) => ws.readyState === 1 && this.getRole(ws) === otherRole);
 
     // Only the very first socket into a fresh room draws down the daily/concurrent
     // budget — the second peer joining an already-open room is free.
-    const room = url.searchParams.get('room') ?? '';
-    if (existing.length === 0) {
+    const room = url.pathname.startsWith('/signal/')
+      ? url.pathname.slice('/signal/'.length)
+      : (url.searchParams.get('room') ?? '');
+    if (!otherPeer) {
       const res = await this.budget().fetch(
         `http://do/?action=try-open&room=${encodeURIComponent(room)}`,
       );
@@ -84,12 +123,17 @@ export class SignalRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+    this.roles.set(server, role);
     this.state.acceptWebSocket(server, [role]);
+    try {
+      server.serializeAttachment({ role } satisfies WsAttachment);
+    } catch {
+      /* ignore */
+    }
 
-    const other = existing[0];
-    if (other) {
+    if (otherPeer) {
       this.send(server, { type: 'ready', role, peerPresent: true });
-      this.send(other.ws, { type: 'peer-joined', role });
+      this.send(otherPeer, { type: 'peer-joined', role });
     } else {
       this.send(server, { type: 'ready', role, peerPresent: false });
     }
@@ -113,11 +157,17 @@ export class SignalRoom {
     } catch {
       return;
     }
+    if (m.type === 'ping') {
+      this.send(ws, { type: 'pong' });
+      return;
+    }
+    if (m.type === 'pong') {
+      return;
+    }
     if (!isRelayable(m)) return; // only offer/answer/ice are ever client-sent
 
-    const role = (this.state.getTags(ws)[0] as Role) ?? 'browser';
-    const other = this.peers().find((p) => p.role !== role);
-    if (other) this.send(other.ws, m);
+    const other = this.state.getWebSockets().find((otherWs) => otherWs !== ws && otherWs.readyState === 1);
+    if (other) this.send(other, m);
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -129,12 +179,13 @@ export class SignalRoom {
   }
 
   private async teardown(ws: WebSocket) {
-    const role = (this.state.getTags(ws)[0] as Role) ?? 'browser';
-    const remaining = this.peers().filter((p) => p.ws !== ws);
-    for (const p of remaining) this.send(p.ws, { type: 'peer-left', role });
+    const role = this.getRole(ws);
+    const remaining = this.state.getWebSockets().filter((p) => p !== ws && p.readyState === 1);
+    for (const p of remaining) this.send(p, { type: 'peer-left', role: role ?? 'browser' });
     if (remaining.length === 0 && (await this.isOpened())) {
-      await this.releaseSlot();
-      await this.state.storage.deleteAlarm();
+      await this.setOpened(false);
+      const room = await this.roomName();
+      await this.budget().fetch(`http://do/?action=release&room=${encodeURIComponent(room)}`);
     }
   }
 

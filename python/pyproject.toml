@@ -20,7 +20,7 @@ dependencies = [
     # Direct V4L2 access so MJPEG-mode camera frames are forwarded as the raw
     # JPEG bytes the driver already produced — no decode, no re-encode, no
     # OpenCV. This is the whole reason capture is cheap enough for a Zero 2 W.
-    "v4l2py>=3.0",
+    "linuxpy>=0.24.0",
 ]
 
 [project.scripts]

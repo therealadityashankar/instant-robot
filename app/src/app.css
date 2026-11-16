@@ -368,7 +368,48 @@ button.big {
   box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
-.btngroup .btngroup-btn:disabled {
+.btngroup .btngroup-btn.connecting {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent);
+  opacity: 0.95;
+  cursor: pointer;
+}
+
+.btngroup .btngroup-btn.connecting:hover {
+  background: color-mix(in srgb, #ef4444 14%, var(--surface));
+  border-color: color-mix(in srgb, #ef4444 60%, transparent);
+  color: #ef4444;
+  z-index: 3;
+}
+
+.btngroup .btngroup-btn.connecting .btn-label-connecting .text-hover {
+  display: none;
+}
+
+.btngroup .btngroup-btn.connecting:hover .btn-label-connecting .text-default {
+  display: none;
+}
+
+.btngroup .btngroup-btn.connecting:hover .btn-label-connecting .text-hover {
+  display: inline;
+}
+
+.btngroup .btngroup-btn.connecting svg {
+  animation: btn-pulse 1.2s infinite ease-in-out;
+}
+
+.btngroup .btngroup-btn.connecting:hover svg {
+  animation: none;
+}
+
+@keyframes btn-pulse {
+  0% { transform: scale(1); opacity: 0.65; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.65; }
+}
+
+.btngroup .btngroup-btn:disabled:not(.connecting) {
   opacity: 0.5;
   cursor: not-allowed;
 }

@@ -21,8 +21,9 @@ import type { Cv } from './cv';
 import type { Corners } from './geometry';
 
 // ── Constants matching make_labeled_tags.py ──────────────────────────────────
-export const LEFT_NAV_ID = 200;
-export const RIGHT_NAV_ID = 201;
+export const ANCHOR_RIGHT_NAV_ID = 200;
+export const RIGHT_NAV_ID = 200; // Universal right anchor marker on all cards
+export const LEFT_NAV_ID = 201;  // Default left marker ID for single-station compatibility
 
 // Card geometry ratios relative to marker size (from make_labeled_tags.py):
 //   quiet zone = 12% of marker, text gap = ~10% of marker
@@ -34,60 +35,134 @@ export const RIGHT_NAV_ID = 201;
 const WARP_W = 400;
 const WARP_H = 120;
 
+export interface LabeledTagPair {
+  /** The unique station ID from the left marker (e.g. 201, 202, 250, 301, etc.). */
+  stationId: number;
+  /** The left marker's corners (unique station ID). */
+  left: Corners;
+  /** The right marker's corners (anchor ID 200). */
+  right: Corners;
+  /** Center of left marker in image pixels. */
+  leftCenter?: [number, number];
+  /** Center of right anchor marker in image pixels. */
+  rightCenter?: [number, number];
+  /** Exact optical midpoint between left and right markers in image pixels. */
+  centerPx?: [number, number];
+}
+
 /** Result from a single labeled tag detection. */
 export interface LabeledTagInfo {
-  /** Unique key for this tag instance — derived from label or position. */
+  /** The unique station ID from the left marker. */
+  stationId: number;
+  /** Unique key for this tag instance — derived from label or station ID. */
   key: string;
   /** The extracted label text (uppercase). */
   label: string;
   /** The extracted description text. */
   description: string;
+  /** Raw label OCR text before sanitization. */
+  rawLabelText: string;
+  /** Raw description OCR text before sanitization. */
+  rawDescText: string;
+  /** OCR confidence score (0..100). */
+  confidence: number;
   /** Average position of the two markers in image pixels. */
   centerPx: [number, number];
-  /** The left marker's corners (200). */
+  /** The left marker's corners (unique station ID). */
   leftCorners: Corners;
-  /** The right marker's corners (201). */
+  /** The right marker's corners (anchor ID 200). */
   rightCorners: Corners;
   /** Raw cropped canvas of the label region (for Gemini fallback). */
   labelCanvas?: HTMLCanvasElement;
   /** Raw cropped canvas of the description region (for Gemini fallback). */
   descCanvas?: HTMLCanvasElement;
+  /** Full cropped card canvas. */
+  fullCanvas?: HTMLCanvasElement;
+  labelDataUrl?: string;
+  descDataUrl?: string;
+  fullDataUrl?: string;
 }
 
 /**
- * Given detected ArUco corners, find all paired 200+201 tags and extract
- * the text region between each pair.
+ * Given detected ArUco corners, find all paired station cards:
+ * [Unique Left Tag ID (201..499)] + [Right Anchor Tag 200].
  *
- * A pair is matched when a tag 200 and a tag 201 are at roughly the same
- * vertical position and the 201 is to the right of the 200, with their
- * centres separated by a plausible distance (1.5–4× the marker size).
+ * Rules:
+ * 1. The anchor tag 200 MUST be placed to the RIGHT of the station tag (dx = cx200 - cxLeft > 0).
+ * 2. Any anchor tag 200 in the opposite direction (to the left, dx <= 0) is STRICTLY IGNORED.
+ * 3. The pair must be separated by a plausible card distance (0.8–8.0× marker size) and vertically aligned.
  */
 export function findLabeledTagPairs(
-  corners: Map<number, Corners>,
-): Array<{ left: Corners; right: Corners }> {
-  const c200 = corners.get(LEFT_NAV_ID);
-  const c201 = corners.get(RIGHT_NAV_ID);
-  if (!c200 || !c201) return [];
+  cornersInput: Map<number, Corners> | { id: number; corners: Corners }[],
+): LabeledTagPair[] {
+  // Normalize input into an array of { id, corners }
+  const detections: { id: number; corners: Corners }[] = Array.isArray(cornersInput)
+    ? cornersInput
+    : Array.from(cornersInput.entries()).map(([id, corners]) => ({ id, corners }));
 
-  const cx200 = (c200[0][0] + c200[1][0] + c200[2][0] + c200[3][0]) / 4;
-  const cy200 = (c200[0][1] + c200[1][1] + c200[2][1] + c200[3][1]) / 4;
-  const cx201 = (c201[0][0] + c201[1][0] + c201[2][0] + c201[3][0]) / 4;
-  const cy201 = (c201[0][1] + c201[1][1] + c201[2][1] + c201[3][1]) / 4;
+  const anchorDetections = detections.filter((d) => d.id === ANCHOR_RIGHT_NAV_ID);
+  const stationDetections = detections.filter((d) => d.id !== ANCHOR_RIGHT_NAV_ID);
 
-  // Identify which marker is visually on the left (smaller X) and right (larger X)
-  const [left, right] = cx200 < cx201 ? [c200, c201] : [c201, c200];
-  const lcx = Math.min(cx200, cx201);
-  const rcx = Math.max(cx200, cx201);
-  const dy = Math.abs(cy200 - cy201);
+  if (!anchorDetections.length || !stationDetections.length) return [];
 
-  // Marker size in pixels (average of left marker's width and height)
-  const lw = Math.hypot(left[1][0] - left[0][0], left[1][1] - left[0][1]);
-  const dx = rcx - lcx;
+  const pairs: LabeledTagPair[] = [];
 
-  // Right should be separated horizontally by 1.0–8× marker width and vertically aligned
-  if (dx < lw * 1.0 || dx > lw * 8.0 || dy > lw * 1.2) return [];
+  for (const s of stationDetections) {
+    const cLeft = s.corners;
+    const cxLeft = (cLeft[0][0] + cLeft[1][0] + cLeft[2][0] + cLeft[3][0]) / 4;
+    const cyLeft = (cLeft[0][1] + cLeft[1][1] + cLeft[2][1] + cLeft[3][1]) / 4;
+    const lw = Math.hypot(cLeft[1][0] - cLeft[0][0], cLeft[1][1] - cLeft[0][1]);
 
-  return [{ left, right }];
+    // Find valid companion anchor 200 strictly to the RIGHT of this station tag
+    let bestAnchor: { id: number; corners: Corners } | null = null;
+    let bestDx = Infinity;
+
+    for (const a of anchorDetections) {
+      const cRight = a.corners;
+      const cxRight = (cRight[0][0] + cRight[1][0] + cRight[2][0] + cRight[3][0]) / 4;
+      const cyRight = (cRight[0][1] + cRight[1][1] + cRight[2][1] + cRight[3][1]) / 4;
+      const rw = Math.hypot(cRight[1][0] - cRight[0][0], cRight[1][1] - cRight[0][1]);
+      const avgW = (lw + rw) / 2;
+
+      const dx = cxRight - cxLeft;
+      const dy = Math.abs(cyRight - cyLeft);
+
+      // Station Tag MUST be on the left, Anchor 200 MUST be on the right (dx > 0)
+      if (dx >= avgW * 0.8 && dx <= avgW * 8.0 && dy <= avgW * 1.2) {
+        if (dx < bestDx) {
+          bestDx = dx;
+          bestAnchor = a;
+        }
+      }
+    }
+
+    if (bestAnchor) {
+      const cRight = bestAnchor.corners;
+      const cxRight = (cRight[0][0] + cRight[1][0] + cRight[2][0] + cRight[3][0]) / 4;
+      const cyRight = (cRight[0][1] + cRight[1][1] + cRight[2][1] + cRight[3][1]) / 4;
+      pairs.push({
+        stationId: s.id,
+        left: cLeft,
+        right: cRight,
+        leftCenter: [cxLeft, cyLeft],
+        rightCenter: [cxRight, cyRight],
+        centerPx: [(cxLeft + cxRight) / 2, (cyLeft + cyRight) / 2],
+      });
+    }
+  }
+
+  // Sort pairs from left to right across the image
+  pairs.sort((a, b) => (a.centerPx ? a.centerPx[0] : 0) - (b.centerPx ? b.centerPx[0] : 0));
+  return pairs;
+}
+
+/**
+ * Check whether a set of detected corners contains a labeled nav tag pair.
+ */
+export function hasLabeledTagPair(
+  cornersInput: Map<number, Corners> | { id: number; corners: Corners }[],
+): boolean {
+  return findLabeledTagPairs(cornersInput).length > 0;
 }
 
 /**
@@ -233,10 +308,11 @@ export function warpTextRegion(
       0, 0, outW, 0, outW, outH, 0, outH,
     ]);
     const mat = new cv.Mat();
+    const dsize = new cv.Size(outW, outH);
     try {
-      const H_warp = cv.getPerspectiveTransform(src, dst);
-      cv.warpPerspective(gray, mat, H_warp, new cv.Size(outW, outH));
-      H_warp.delete();
+      const H = cv.getPerspectiveTransform(src, dst);
+      cv.warpPerspective(gray, mat, H, dsize);
+      H.delete();
       return mat;
     } finally {
       src.delete();
@@ -261,20 +337,23 @@ export function warpTextRegion(
   }
 }
 
-/** Convert a grayscale cv.Mat to a canvas for display or Gemini. */
+/** Convert a grayscale cv.Mat to a canvas for display or OCR without leaking memory. */
 export function matToCanvas(cv: Cv, mat: any): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = mat.cols;
   c.height = mat.rows;
   const rgba = new cv.Mat();
-  cv.cvtColor(mat, rgba, cv.COLOR_GRAY2RGBA);
-  const imgData = new ImageData(
-    new Uint8ClampedArray(rgba.data),
-    mat.cols,
-    mat.rows,
-  );
-  rgba.delete();
-  c.getContext('2d')!.putImageData(imgData, 0, 0);
+  try {
+    cv.cvtColor(mat, rgba, cv.COLOR_GRAY2RGBA);
+    const imgData = new ImageData(
+      new Uint8ClampedArray(rgba.data),
+      mat.cols,
+      mat.rows,
+    );
+    c.getContext('2d')!.putImageData(imgData, 0, 0);
+  } finally {
+    rgba.delete();
+  }
   return c;
 }
 
@@ -318,6 +397,19 @@ export async function initTesseract(): Promise<void> {
   }
 }
 
+/** Cleanly terminate the Tesseract worker to free Web Worker memory. */
+export async function terminateTesseract(): Promise<void> {
+  if (tesseractWorker) {
+    try {
+      await tesseractWorker.terminate();
+    } catch {
+      /* ignore */
+    }
+    tesseractWorker = null;
+    tesseractReady = false;
+  }
+}
+
 export interface OcrResult {
   text: string;
   rawText: string;
@@ -325,16 +417,15 @@ export interface OcrResult {
 }
 
 /**
- * OCR a cv.Mat using Tesseract.js.
+ * OCR an HTMLCanvasElement using Tesseract.js (no cv.Mat held in memory).
  */
-export async function ocrMat(cv: Cv, mat: any): Promise<OcrResult> {
+export async function ocrCanvas(canvas: HTMLCanvasElement): Promise<OcrResult> {
   if (!tesseractReady) {
     await initTesseract();
   }
   if (!tesseractReady || !tesseractWorker) {
     return { text: '', rawText: '', confidence: 0 };
   }
-  const canvas = matToCanvas(cv, mat);
   try {
     const res = await tesseractWorker.recognize(canvas);
     const rawText = (res.data?.text || '').trim();
@@ -350,106 +441,106 @@ export async function ocrMat(cv: Cv, mat: any): Promise<OcrResult> {
   }
 }
 
-export interface LabeledTagInfo {
-  key: string;
-  label: string;
-  description: string;
-  rawLabelText: string;
-  rawDescText: string;
-  confidence: number;
-  centerPx: [number, number];
-  leftCorners: Corners;
-  rightCorners: Corners;
-  labelCanvas?: HTMLCanvasElement;
-  descCanvas?: HTMLCanvasElement;
-  fullCanvas?: HTMLCanvasElement;
-  labelDataUrl?: string;
-  descDataUrl?: string;
-  fullDataUrl?: string;
+/**
+ * Legacy wrapper for ocrMat (converts to canvas and immediately disposes Mat).
+ */
+export async function ocrMat(cv: Cv, mat: any): Promise<OcrResult> {
+  const canvas = matToCanvas(cv, mat);
+  return ocrCanvas(canvas);
 }
 
 /**
  * Full pipeline: find a labeled tag pair, warp the text regions, OCR both.
+ * All OpenCV Mats are deleted synchronously before running async Tesseract OCR.
  */
 export async function extractLabeledTag(
   cv: Cv,
   corners: Map<number, Corners>,
   gray: any,
+  targetStationId?: number,
 ): Promise<LabeledTagInfo | null> {
-  const c200 = corners.get(LEFT_NAV_ID);
-  const c201 = corners.get(RIGHT_NAV_ID);
-  if (!c200 || !c201) return null;
+  const pairs = findLabeledTagPairs(corners);
+  if (!pairs.length) return null;
 
-  const warped = warpTextRegion(cv, gray, c200, c201);
+  const pair = (targetStationId !== undefined ? pairs.find((p) => p.stationId === targetStationId) : null) || pairs[0];
+  if (!pair) return null;
+
+  const cLeft = pair.left;
+  const cRight = pair.right;
+
+  // Warp into clean Mats
+  const warped = warpTextRegion(cv, gray, cLeft, cRight);
   if (!warped) return null;
 
   const { fullMat, labelMat, descMat } = warped;
+  let fullCanvas: HTMLCanvasElement;
+  let labelCanvas: HTMLCanvasElement;
+  let descCanvas: HTMLCanvasElement;
+  let threshLabelCanvas: HTMLCanvasElement;
+  let threshDescCanvas: HTMLCanvasElement;
 
   try {
     const threshLabel = new cv.Mat();
     const threshDesc = new cv.Mat();
-    cv.threshold(labelMat, threshLabel, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-    cv.threshold(descMat, threshDesc, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+    try {
+      cv.threshold(labelMat, threshLabel, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+      cv.threshold(descMat, threshDesc, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
 
-    // Try Otsu thresholded first; fallback to raw grayscale if needed
-    let labelRes = await ocrMat(cv, threshLabel);
-    if (!labelRes.text) {
-      labelRes = await ocrMat(cv, labelMat);
+      fullCanvas = matToCanvas(cv, fullMat);
+      labelCanvas = matToCanvas(cv, labelMat);
+      descCanvas = matToCanvas(cv, descMat);
+      threshLabelCanvas = matToCanvas(cv, threshLabel);
+      threshDescCanvas = matToCanvas(cv, threshDesc);
+    } finally {
+      threshLabel.delete();
+      threshDesc.delete();
     }
-
-    let descRes = await ocrMat(cv, threshDesc);
-    if (!descRes.text) {
-      descRes = await ocrMat(cv, descMat);
-    }
-
-    const labelCanvas = matToCanvas(cv, threshLabel);
-    const descCanvas = matToCanvas(cv, threshDesc);
-    const fullCanvas = matToCanvas(cv, fullMat);
-
-    const labelDataUrl = labelCanvas.toDataURL('image/png');
-    const descDataUrl = descCanvas.toDataURL('image/png');
-    const fullDataUrl = fullCanvas.toDataURL('image/png');
-
-    threshLabel.delete();
-    threshDesc.delete();
-
-    const cx200 = (c200[0][0] + c200[1][0] + c200[2][0] + c200[3][0]) / 4;
-    const cy200 = (c200[0][1] + c200[1][1] + c200[2][1] + c200[3][1]) / 4;
-    const cx201 = (c201[0][0] + c201[1][0] + c201[2][0] + c201[3][0]) / 4;
-    const cy201 = (c201[0][1] + c201[1][1] + c201[2][1] + c201[3][1]) / 4;
-
-    const cleanLabel = labelRes.text.replace(/[^A-Za-z0-9 ]/g, '').trim().toUpperCase();
-    const cleanDesc = descRes.text.replace(/[^A-Za-z0-9 ,.'!-]/g, '').trim();
-
-    return {
-      key: cleanLabel || `tag_${Math.round(cx200)}_${Math.round(cy200)}`,
-      label: cleanLabel,
-      description: cleanDesc,
-      rawLabelText: labelRes.rawText,
-      rawDescText: descRes.rawText,
-      confidence: labelRes.confidence,
-      centerPx: [(cx200 + cx201) / 2, (cy200 + cy201) / 2],
-      leftCorners: c200,
-      rightCorners: c201,
-      labelCanvas,
-      descCanvas,
-      fullCanvas,
-      labelDataUrl,
-      descDataUrl,
-      fullDataUrl,
-    };
   } finally {
     fullMat.delete();
     labelMat.delete();
     descMat.delete();
   }
+
+  const labelDataUrl = threshLabelCanvas.toDataURL('image/png');
+  const descDataUrl = threshDescCanvas.toDataURL('image/png');
+  const fullDataUrl = fullCanvas.toDataURL('image/png');
+
+  // Now run Tesseract OCR on pure JS canvases (0 OpenCV Mats held in memory)
+  let labelRes = await ocrCanvas(threshLabelCanvas);
+  if (!labelRes.text) {
+    labelRes = await ocrCanvas(labelCanvas);
+  }
+
+  let descRes = await ocrCanvas(threshDescCanvas);
+  if (!descRes.text) {
+    descRes = await ocrCanvas(descCanvas);
+  }
+
+  const cxLeft = (cLeft[0][0] + cLeft[1][0] + cLeft[2][0] + cLeft[3][0]) / 4;
+  const cyLeft = (cLeft[0][1] + cLeft[1][1] + cLeft[2][1] + cLeft[3][1]) / 4;
+  const cxRight = (cRight[0][0] + cRight[1][0] + cRight[2][0] + cRight[3][0]) / 4;
+  const cyRight = (cRight[0][1] + cRight[1][1] + cRight[2][1] + cRight[3][1]) / 4;
+
+  const cleanLabel = labelRes.text.replace(/[^A-Za-z0-9 ]/g, '').trim().toUpperCase();
+  const cleanDesc = descRes.text.replace(/[^A-Za-z0-9 ,.'!-]/g, '').trim();
+
+  return {
+    stationId: pair.stationId,
+    key: cleanLabel || `station_${pair.stationId}`,
+    label: cleanLabel,
+    description: cleanDesc,
+    rawLabelText: labelRes.rawText,
+    rawDescText: descRes.rawText,
+    confidence: labelRes.confidence,
+    centerPx: [(cxLeft + cxRight) / 2, (cyLeft + cyRight) / 2],
+    leftCorners: cLeft,
+    rightCorners: cRight,
+    labelCanvas: threshLabelCanvas,
+    descCanvas: threshDescCanvas,
+    fullCanvas,
+    labelDataUrl,
+    descDataUrl,
+    fullDataUrl,
+  };
 }
 
-/**
- * Check whether a set of detected corners contains a labeled nav tag pair.
- * This is a fast check (no OCR) — use it to decide whether to run the
- * full extraction pipeline.
- */
-export function hasLabeledTagPair(corners: Map<number, Corners>): boolean {
-  return findLabeledTagPairs(corners).length > 0;
-}

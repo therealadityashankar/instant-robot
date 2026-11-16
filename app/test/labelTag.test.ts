@@ -8,71 +8,122 @@ import {
 } from '../src/lib/labelTag';
 import type { Corners } from '../src/lib/geometry';
 
-test('findLabeledTagPairs identifies valid left and right 200/201 pairs', () => {
+test('findLabeledTagPairs identifies valid unique left and right 200 anchor pairs', () => {
   const corners = new Map<number, Corners>();
 
-  // Left marker 200: (x=100..140, y=200..240)
-  const left: Corners = [
+  // Left marker 250 (unique station ID): (x=100..140, y=200..240)
+  const left250: Corners = [
     [100, 200], // TL
     [140, 200], // TR
     [140, 240], // BR
     [100, 240], // BL
   ];
 
-  // Right marker 201: (x=240..280, y=200..240) - shifted right by 100px (gap is 100px)
-  const right: Corners = [
+  // Right marker 200 (fixed anchor): (x=240..280, y=200..240) - shifted right by 100px (gap is 100px)
+  const right200: Corners = [
     [240, 200], // TL
     [280, 200], // TR
     [280, 240], // BR
     [240, 240], // BL
   ];
 
-  corners.set(LEFT_NAV_ID, left);
-  corners.set(RIGHT_NAV_ID, right);
+  corners.set(250, left250);
+  corners.set(RIGHT_NAV_ID, right200);
 
   assert.equal(hasLabeledTagPair(corners), true);
   const pairs = findLabeledTagPairs(corners);
   assert.equal(pairs.length, 1);
-  assert.deepEqual(pairs[0].left, left);
-  assert.deepEqual(pairs[0].right, right);
+  assert.equal(pairs[0].stationId, 250);
+  assert.deepEqual(pairs[0].left, left250);
+  assert.deepEqual(pairs[0].right, right200);
 });
 
-test('findLabeledTagPairs handles inverted visual order and rejects vertical misalignment', () => {
+test('findLabeledTagPairs matches multiple stations with anchor 200 and rejects vertical misalignment', () => {
   const corners = new Map<number, Corners>();
 
-  // 200 is visually on the right, 201 is visually on the left
-  const tag200: Corners = [
-    [300, 200],
-    [340, 200],
-    [340, 240],
-    [300, 240],
-  ];
+  // Station 201: left of 200
   const tag201: Corners = [
     [100, 200],
     [140, 200],
     [140, 240],
     [100, 240],
   ];
+  // Anchor 200: right of 201
+  const tag200: Corners = [
+    [300, 200],
+    [340, 200],
+    [340, 240],
+    [300, 240],
+  ];
 
-  corners.set(LEFT_NAV_ID, tag200);
-  corners.set(RIGHT_NAV_ID, tag201);
+  corners.set(201, tag201);
+  corners.set(RIGHT_NAV_ID, tag200);
 
   assert.equal(hasLabeledTagPair(corners), true);
   const pairs = findLabeledTagPairs(corners);
   assert.equal(pairs.length, 1);
-  assert.deepEqual(pairs[0].left, tag201); // 201 is visually on left
-  assert.deepEqual(pairs[0].right, tag200); // 200 is visually on right
+  assert.equal(pairs[0].stationId, 201);
+  assert.deepEqual(pairs[0].left, tag201);
+  assert.deepEqual(pairs[0].right, tag200);
 
   // Now test excessive vertical misalignment
-  const tag201Misaligned: Corners = [
+  const tagMisaligned: Corners = [
     [100, 400],
     [140, 400],
     [140, 440],
     [100, 440],
   ];
-  corners.set(RIGHT_NAV_ID, tag201Misaligned);
+  corners.set(201, tagMisaligned);
   assert.equal(hasLabeledTagPair(corners), false);
   assert.equal(findLabeledTagPairs(corners).length, 0);
+});
+
+test('findLabeledTagPairs strictly rejects anchor 200 placed to the LEFT of station tag', () => {
+  // Station 201 is on the right (x=300..340), Anchor 200 is on the left (x=100..140) -> INVALID OPPOSITE DIRECTION
+  const tag201Right: Corners = [
+    [300, 200],
+    [340, 200],
+    [340, 240],
+    [300, 240],
+  ];
+  const tag200Left: Corners = [
+    [100, 200],
+    [140, 200],
+    [140, 240],
+    [100, 240],
+  ];
+
+  const corners = new Map<number, Corners>();
+  corners.set(201, tag201Right);
+  corners.set(RIGHT_NAV_ID, tag200Left);
+
+  // Must be rejected because 200 is to the left of 201
+  assert.equal(hasLabeledTagPair(corners), false);
+  assert.equal(findLabeledTagPairs(corners).length, 0);
+});
+
+test('findLabeledTagPairs pairs multiple stations correctly when multiple 200 anchors exist in scene', () => {
+  // Station 1: 201 (x=50) + 200_A (x=150)
+  const tag201: Corners = [[50, 100], [80, 100], [80, 130], [50, 130]];
+  const tag200A: Corners = [[150, 100], [180, 100], [180, 130], [150, 130]];
+
+  // Station 2: 202 (x=300) + 200_B (x=400)
+  const tag202: Corners = [[300, 100], [330, 100], [330, 130], [300, 130]];
+  const tag200B: Corners = [[400, 100], [430, 100], [430, 130], [400, 130]];
+
+  const allDetections = [
+    { id: 201, corners: tag201 },
+    { id: 200, corners: tag200A },
+    { id: 202, corners: tag202 },
+    { id: 200, corners: tag200B },
+  ];
+
+  const pairs = findLabeledTagPairs(allDetections);
+  assert.equal(pairs.length, 2);
+  assert.equal(pairs[0].stationId, 201);
+  assert.deepEqual(pairs[0].right, tag200A);
+  assert.equal(pairs[1].stationId, 202);
+  assert.deepEqual(pairs[1].right, tag200B);
 });
 
 import { getInnerEdgeCorners, warpTextRegion } from '../src/lib/labelTag';

@@ -17,6 +17,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260811.1",
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@types/marked": "^5.0.2",
     "@types/node": "^26.1.1",
     "playwright-core": "^1.62.1",
     "puppeteer-core": "^25.8.0",
@@ -31,6 +32,8 @@
     "@techstark/opencv-js": "^5.0.0-release.1",
     "@types/three": "^0.185.1",
     "feetech.js": "^0.1.2",
+    "fflate": "^0.8.2",
+    "marked": "^18.0.11",
     "mujoco-js": "^0.0.7",
     "tesseract.js": "^7.0.0",
     "three": "^0.185.1"

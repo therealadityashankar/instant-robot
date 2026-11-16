@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { marked } from 'marked';
   import { settings } from './lib/settings.svelte';
   import { audioRecorder } from './lib/audioRecorder';
   import {
@@ -11,9 +12,11 @@
   let {
     context,
     callbacks,
+    onUploadStl,
   }: {
     context: RobotStateContext;
     callbacks: RobotActionCallbacks;
+    onUploadStl?: (name: string, buffer: Uint8Array) => void;
   } = $props();
 
   let messages = $state<ChatMessage[]>([]);
@@ -23,6 +26,40 @@
   let errorMsg = $state<string | null>(null);
   let missingKeyPrompt = $state(false);
   let chatContainer = $state<HTMLDivElement>();
+
+  function renderMarkdown(content: string): string {
+    if (!content) return '';
+    try {
+      return marked.parse(content, { breaks: true, gfm: true }) as string;
+    } catch {
+      return content;
+    }
+  }
+
+  async function handleStlUpload(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const fileName = file.name.endsWith('.stl') ? file.name : `${file.name}.stl`;
+      onUploadStl?.(fileName, buffer);
+
+      const notifyMsg: ChatMessage = {
+        id: `msg-stl-${Date.now()}`,
+        role: 'user',
+        content: `Uploaded 3D Model: ${fileName} (${Math.round(file.size / 1024)} KB)`,
+        timestamp: Date.now(),
+      };
+      messages = [...messages, notifyMsg];
+      scrollToBottom();
+    } catch (err: any) {
+      errorMsg = err.message || 'Failed to upload STL model.';
+    } finally {
+      input.value = '';
+    }
+  }
 
   function scrollToBottom() {
     setTimeout(() => {
@@ -94,7 +131,7 @@
         const userVoiceMsg: ChatMessage = {
           id: `msg-voice-${Date.now()}`,
           role: 'user',
-          content: '🎙️ Voice command',
+          content: 'Voice command',
           timestamp: Date.now(),
           audioBase64: base64,
           audioMimeType: mimeType,
@@ -144,13 +181,19 @@
         <div class="msg {msg.role}">
           <div class="bubble">
             {#if msg.audioBase64}
-              <span class="voicebadge">🎙️ Audio message</span>
+              <span class="voicebadge">Voice command</span>
             {/if}
-            <div class="content">{msg.content}</div>
+            <div class="content markdown-body">
+              {#if msg.role === 'assistant'}
+                {@html renderMarkdown(msg.content)}
+              {:else}
+                {msg.content}
+              {/if}
+            </div>
             {#if msg.toolCalls}
               <div class="toolcalls">
                 {#each msg.toolCalls as tc}
-                  <span class="toolbadge">⚡ {tc.result || tc.name}</span>
+                  <span class="toolbadge">{tc.result || tc.name}</span>
                 {/each}
               </div>
             {/if}
@@ -167,7 +210,7 @@
     </div>
   {/if}
 
-  <!-- Minimalist, seamless flush input group: Voice Button + Text Input + Send Button -->
+  <!-- Minimalist, seamless flush input group: Voice Button + Text Input + STL Upload + Send Button -->
   <div class="inputgroup" class:has-focus={false}>
     <button
       type="button"
@@ -201,6 +244,32 @@
       onkeydown={handleKeyDown}
       aria-label="Command text"
     />
+
+    <label
+      class="segment-btn stl-btn"
+      class:disabled={busy || isRecording}
+      title="Upload custom STL 3D model for 3D printer / stations"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+        <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+        <line x1="12" y1="22.08" x2="12" y2="12" />
+      </svg>
+      <input
+        type="file"
+        accept=".stl"
+        onchange={handleStlUpload}
+        disabled={busy || isRecording}
+        style="display:none;"
+      />
+    </label>
 
     <button
       type="button"
@@ -335,6 +404,44 @@
     background: var(--surface, #ffffff);
     color: var(--ink, #111827);
     border: 1px solid var(--line-soft, #e5e7eb);
+  }
+
+  .markdown-body :global(p) {
+    margin: 0 0 0.35rem 0;
+  }
+  .markdown-body :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .markdown-body :global(ul),
+  .markdown-body :global(ol) {
+    margin: 0.2rem 0 0.35rem 1.1rem;
+    padding: 0;
+  }
+  .markdown-body :global(li) {
+    margin-bottom: 0.15rem;
+  }
+  .markdown-body :global(code) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.72rem;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 0.1rem 0.25rem;
+    border-radius: 3px;
+  }
+  .markdown-body :global(pre) {
+    background: #0f172a;
+    color: #f8fafc;
+    padding: 0.35rem 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 0.3rem 0;
+  }
+  .markdown-body :global(pre code) {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+  .markdown-body :global(strong) {
+    font-weight: 700;
   }
 
   .voicebadge {
@@ -472,6 +579,16 @@
   @keyframes pulse {
     0% { transform: scale(1); opacity: 0.8; }
     100% { transform: scale(1.2); opacity: 0; }
+  }
+
+  .stl-btn {
+    border-left: 1px solid var(--line-soft, #e5e7eb);
+    cursor: pointer;
+  }
+
+  .stl-btn svg {
+    width: 14px;
+    height: 14px;
   }
 
   .sendbtn {

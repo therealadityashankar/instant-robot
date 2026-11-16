@@ -24,24 +24,46 @@ class ArmLink {
   connectRemote: ((opts: RemoteRobotOptions) => Promise<void>) | null = $state(null);
   disconnect: (() => Promise<void>) | null = $state(null);
 
+  private runGeneration = 0;
+
   async run(fn: (() => Promise<void>) | null) {
-    if (this.busy || !fn) return;
+    if (!fn) return;
+    const gen = ++this.runGeneration;
     this.busy = true;
     this.error = null;
     try {
       await fn();
+    } catch (e) {
+      if (gen === this.runGeneration) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
     } finally {
-      this.busy = false;
+      if (gen === this.runGeneration) {
+        this.busy = false;
+      }
     }
   }
 
-  /** Header button: connected -> disconnect; not connected -> show the picker. */
+  /** Header button: busy -> cancel; connected -> disconnect; not connected -> show the picker. */
   toggle() {
-    if (this.busy) return;
+    if (this.busy) {
+      this.cancel();
+      return;
+    }
     if (this.connected) {
       this.run(this.disconnect);
     } else {
       this.chooserOpen = true;
+    }
+  }
+
+  cancel() {
+    this.runGeneration++;
+    this.busy = false;
+    this.error = null;
+    this.chooserOpen = false;
+    if (this.disconnect) {
+      void this.disconnect();
     }
   }
 

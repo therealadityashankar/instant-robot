@@ -59,6 +59,9 @@ class Peer:
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._channel_ready = {name: asyncio.Event() for name in (CH_RPC, CH_STREAM, CH_VIDEO)}
         self._offer_seen = asyncio.Event()
+        self._peer_left = asyncio.Event()
+        self._pending_ice: list[object] = []
+        self._recv_task: asyncio.Task | None = None
 
     def on_channel_open(self, name: str, cb) -> None:
         """Register a callback for when a named datachannel opens (post-connect)."""
@@ -67,12 +70,17 @@ class Peer:
 
     async def connect(self, timeout_s: float = 30.0) -> None:
         url = f"{self.signal_url}/signal/{self.room}?role=robot&token={self.token}"
-        self._ws = await websockets.connect(
-            url,
-            open_timeout=timeout_s,
-            ping_interval=20.0,
-            ping_timeout=20.0,
+        log.info("connecting ws to %s", url)
+        self._ws = await asyncio.wait_for(
+            websockets.connect(
+                url,
+                open_timeout=min(10.0, timeout_s),
+                ping_interval=20.0,
+                ping_timeout=20.0,
+            ),
+            timeout=min(10.0, timeout_s),
         )
+        log.info("ws connected ok to %s", url)
 
         @self.pc.on("datachannel")
         def on_datachannel(channel):
@@ -89,10 +97,11 @@ class Peer:
         # answer SDP, so there is nothing to forward from this side.
 
         @self.pc.on("connectionstatechange")
-        async def on_state():
+        def on_state():
             log.info("peer connection state: %s", self.pc.connectionState)
 
-        recv_task = asyncio.create_task(self._recv_loop())
+        self._recv_task = asyncio.create_task(self._recv_loop())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
         # Two separate waits, because they mean different things. Waiting for a
         # browser to show up is open-ended — a robot sits idle for hours and that
@@ -101,10 +110,10 @@ class Peer:
         # would exhaust the cap in about an hour. Only once an offer arrives is
         # there a handshake that can legitimately be called stuck.
         offer = asyncio.ensure_future(self._offer_seen.wait())
-        done, _ = await asyncio.wait({offer, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait({offer, self._recv_task}, return_when=asyncio.FIRST_COMPLETED)
         if offer not in done:
             offer.cancel()
-            err = recv_task.exception() if recv_task.done() else None
+            err = self._recv_task.exception() if self._recv_task.done() else None
             raise RuntimeError(f"signalling ended before any offer arrived: {err}")
 
         try:
@@ -115,18 +124,25 @@ class Peer:
                 timeout=timeout_s,
             )
         except asyncio.TimeoutError:
-            # A dead _recv_loop is the usual cause; surface it rather than the
-            # bare timeout, which says nothing about why.
-            if recv_task.done() and recv_task.exception():
-                raise RuntimeError(f"signalling failed: {recv_task.exception()}") from recv_task.exception()
+            if self._recv_task.done() and self._recv_task.exception():
+                raise RuntimeError(f"signalling failed: {self._recv_task.exception()}") from self._recv_task.exception()
             raise RuntimeError(
                 f"offer received but no datachannel opened within {timeout_s:.0f}s "
                 f"(ICE state={self.pc.iceConnectionState}, connection={self.pc.connectionState}). "
                 "Usually means ICE could not establish a peer-to-peer path."
             ) from None
         finally:
-            if recv_task.done() and recv_task.exception():
-                log.error("signalling loop died: %s", recv_task.exception())
+            if self._recv_task.done() and self._recv_task.exception():
+                log.error("signalling loop died: %s", self._recv_task.exception())
+
+    async def _heartbeat_loop(self) -> None:
+        try:
+            while self._ws and getattr(self._ws, "state", None) == 1:
+                await asyncio.sleep(5.0)
+                if self._ws and getattr(self._ws, "state", None) == 1:
+                    await self._ws.send(json.dumps({"type": "ping"}))
+        except Exception:
+            pass
 
     async def _recv_loop(self) -> None:
         assert self._ws is not None
@@ -138,6 +154,12 @@ class Peer:
                     log.info("offer received, answering")
                     self._offer_seen.set()
                     await self.pc.setRemoteDescription(RTCSessionDescription(sdp=m["sdp"], type="offer"))
+                    for early_cand in self._pending_ice:
+                        try:
+                            await self.pc.addIceCandidate(early_cand)
+                        except Exception as e:
+                            log.warning("could not add early ICE candidate: %s", e)
+                    self._pending_ice.clear()
                     answer = await self.pc.createAnswer()
                     await self.pc.setLocalDescription(answer)
                     await self._ws.send(
@@ -147,40 +169,71 @@ class Peer:
                 elif t == "ice":
                     cand = m.get("candidate")
                     if cand:
-                        parsed = _parse_ice(cand)
-                        if parsed is not None:
-                            await self.pc.addIceCandidate(parsed)
+                        try:
+                            parsed = _parse_ice(cand)
+                            if parsed is not None:
+                                if self.pc.remoteDescription is not None:
+                                    await self.pc.addIceCandidate(parsed)
+                                else:
+                                    self._pending_ice.append(parsed)
+                        except Exception as e:
+                            log.warning("failed to process ICE candidate: %s", e)
                 elif t == "error":
                     log.error("signalling error: %s", m.get("reason"))
-                elif t in ("ready", "peer-joined", "peer-left"):
-                    log.info("signalling: %s", m)
+                elif t == "peer-left":
+                    log.info("signalling: peer-left (role=%s)", m.get("role"))
+                    self._peer_left.set()
+                elif t in ("ready", "peer-joined", "pong"):
+                    if t != "pong":
+                        log.info("signalling: %s", m)
         except Exception:
-            # Without this the traceback vanishes into the task and all the
-            # caller sees is a timeout with no cause.
             log.exception("signalling loop failed")
             raise
 
     async def wait_closed(self) -> None:
-        """Block until the peer connection drops, so the caller can re-pair."""
+        """Block until the peer connection drops, signaling drops, or peer leaves."""
         done = asyncio.Event()
 
         @self.pc.on("connectionstatechange")
-        async def _watch():
+        def _watch_pc():
             if self.pc.connectionState in ("failed", "closed", "disconnected"):
                 done.set()
 
-        # Catch a connection that died between connect() returning and this
-        # handler being attached.
+        @self.pc.on("iceconnectionstatechange")
+        def _watch_ice():
+            if self.pc.iceConnectionState in ("failed", "closed", "disconnected"):
+                done.set()
+
         if self.pc.connectionState in ("failed", "closed", "disconnected"):
             return
-        await done.wait()
+
+        async def _watch_events():
+            peer_left_fut = asyncio.ensure_future(self._peer_left.wait())
+            recv_task_fut = self._recv_task if self._recv_task else asyncio.sleep(86400)
+            d, _ = await asyncio.wait(
+                {peer_left_fut, recv_task_fut},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            peer_left_fut.cancel()
+            done.set()
+
+        watcher = asyncio.create_task(_watch_events())
+        try:
+            await done.wait()
+        finally:
+            watcher.cancel()
 
     async def close(self) -> None:
+        if hasattr(self, "_recv_task") and self._recv_task and not self._recv_task.done():
+            self._recv_task.cancel()
+        if hasattr(self, "_heartbeat_task") and self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
         if self._ws:
             try:
                 await self._ws.close()
             except Exception:
                 pass
+            self._ws = None
         try:
             await self.pc.close()
         except Exception:

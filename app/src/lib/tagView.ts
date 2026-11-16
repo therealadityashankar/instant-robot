@@ -61,11 +61,12 @@ export class TagView {
 
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
     this.camera.up.set(0, 0, 1); // MuJoCo world is z-up
-    this.camera.position.set(1.745, -0.277, 1.234);
+    this.camera.position.set(-0.570, 0.189, 1.524);
 
     this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(0.0, -0.1, 0.15);
+    this.controls.target.set(0.309, 0.153, 0.514);
     this.controls.enableDamping = true;
+    this.controls.maxDistance = 6.25;
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
     const dir = new THREE.DirectionalLight(0xffffff, 1.0);

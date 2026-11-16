@@ -31,9 +31,9 @@
   import JointCalibration from './JointCalibration.svelte';
   import Simulator from './Simulator.svelte';
   import { armLink } from './lib/armLink.svelte';
-  import { settings } from './lib/settings.svelte';
   import SettingsModal from './SettingsModal.svelte';
   import BaseCalibration from './BaseCalibration.svelte';
+  import PickCalibration from './PickCalibration.svelte';
 
   let params = $state<BoardParams>({ ...DEFAULT_PARAMS });
 
@@ -81,7 +81,7 @@
 
   // ── Calibration modal: camera intrinsics / detect / joint calibration ─────
   let calibrateOpen = $state(false);
-  let calStep = $state<'intrinsics' | 'test' | 'joints' | 'base'>('intrinsics');
+  let calStep = $state<'intrinsics' | 'test' | 'joints' | 'base' | 'pick'>('intrinsics');
 
   // ── Camera intrinsics (ChArUco) ───────────────────────────────────────────
   let intrinsics = $state<Intrinsics | null>(loadIntrinsics());
@@ -476,10 +476,13 @@
     };
   });
 
-  // Start the camera when the calibration modal opens; release it when it closes.
+  // Start the camera ONLY when the calibration modal is on a camera step ('intrinsics' or 'test')
   $effect(() => {
-    if (calibrateOpen) startCamera();
-    else stopCamera();
+    if (calibrateOpen && (calStep === 'intrinsics' || calStep === 'test')) {
+      startCamera();
+    } else {
+      stopCamera();
+    }
   });
 </script>
 
@@ -566,6 +569,9 @@
           <button class:active={calStep === 'base'} onclick={() => (calStep = 'base')}>
             4 · Base
           </button>
+          <button class:active={calStep === 'pick'} onclick={() => (calStep = 'pick')}>
+            5 · Pick Setup
+          </button>
         </div>
         <button class="close" onclick={() => (calibrateOpen = false)}>✕</button>
       </div>
@@ -575,6 +581,8 @@
           <JointCalibration />
         {:else if calStep === 'base'}
           <BaseCalibration />
+        {:else if calStep === 'pick'}
+          <PickCalibration />
         {:else}
           <div class="layout">
     <div>

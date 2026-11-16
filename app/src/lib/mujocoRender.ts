@@ -90,6 +90,371 @@ function meshGeometry(model: MjModel, meshId: number): THREE.BufferGeometry {
  * renderers with their own copies is what made the app crawl. Sharing means the
  * geometry is built and animated once no matter how many views look at it.
  */
+// ── Procedural Textures & Materials for Items, Props & Stations ───────────────
+
+const TEXTURE_CACHE = new Map<string, THREE.CanvasTexture>();
+
+function getOrCreateTexture(
+  key: string,
+  drawFn: (ctx: CanvasRenderingContext2D, w: number, h: number) => void,
+  w = 256,
+  h = 256,
+): THREE.CanvasTexture {
+  if (TEXTURE_CACHE.has(key)) return TEXTURE_CACHE.get(key)!;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d')!;
+  drawFn(ctx, w, h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  TEXTURE_CACHE.set(key, tex);
+  return tex;
+}
+
+/** Realistic natural wood grain texture with growth rings and fibers. */
+function getWoodBlockTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('wood_block', (ctx, w, h) => {
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, '#d97706');
+    grad.addColorStop(0.3, '#b45309');
+    grad.addColorStop(0.7, '#d97706');
+    grad.addColorStop(1, '#92400e');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Fine wood grain rings & long fibers
+    for (let i = 0; i < 300; i++) {
+      const y = Math.random() * h;
+      ctx.strokeStyle = `rgba(120, 53, 15, ${0.08 + Math.random() * 0.18})`;
+      ctx.lineWidth = 0.6 + Math.random() * 1.8;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= w; x += 16) {
+        ctx.lineTo(x, y + Math.sin(x / 20 + i * 0.3) * 2.5 + Math.sin(x / 40) * 1.5);
+      }
+      ctx.stroke();
+    }
+    // Growth ring subtle accents
+    for (let i = 0; i < 15; i++) {
+      ctx.strokeStyle = 'rgba(67, 20, 7, 0.25)';
+      ctx.lineWidth = 1.2;
+      const y = (i / 15) * h;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= w; x += 32) {
+        ctx.lineTo(x, y + Math.cos(x / 30) * 3);
+      }
+      ctx.stroke();
+    }
+  });
+}
+
+/** Glossy crimson apple skin with stippling and golden undertones. */
+function getAppleTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('apple_skin', (ctx, w, h) => {
+    const grad = ctx.createRadialGradient(w * 0.4, h * 0.3, 10, w * 0.5, h * 0.5, w * 0.6);
+    grad.addColorStop(0, '#ef4444');
+    grad.addColorStop(0.4, '#dc2626');
+    grad.addColorStop(0.8, '#991b1b');
+    grad.addColorStop(1, '#7f1d1d');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Natural golden undertone streaks
+    for (let i = 0; i < 80; i++) {
+      const x = Math.random() * w;
+      ctx.strokeStyle = `rgba(251, 191, 36, ${0.08 + Math.random() * 0.12})`;
+      ctx.lineWidth = 1 + Math.random() * 2;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x + (Math.random() - 0.5) * 20, h);
+      ctx.stroke();
+    }
+    // Micro-stippling (apple lenticels)
+    for (let i = 0; i < 400; i++) {
+      ctx.fillStyle = `rgba(254, 240, 138, ${0.15 + Math.random() * 0.35})`;
+      ctx.beginPath();
+      ctx.arc(Math.random() * w, Math.random() * h, 0.6 + Math.random() * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+
+/** Dimpled citrus orange peel with tactile pores. */
+function getOrangeTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('orange_peel', (ctx, w, h) => {
+    const grad = ctx.createRadialGradient(w * 0.4, h * 0.4, 20, w * 0.5, h * 0.5, w * 0.6);
+    grad.addColorStop(0, '#fb923c');
+    grad.addColorStop(0.6, '#f97316');
+    grad.addColorStop(1, '#c2410c');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Dimpled relief pores
+    for (let i = 0; i < 1200; i++) {
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      const r = 0.8 + Math.random() * 1.2;
+      ctx.fillStyle = 'rgba(154, 52, 18, 0.45)';
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(254, 215, 170, 0.35)';
+      ctx.beginPath();
+      ctx.arc(x - 0.5, y - 0.5, r * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+
+/** Banana peel with longitudinal facet shading and ripening speckles. */
+function getBananaTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('banana_peel', (ctx, w, h) => {
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#84cc16'); // green stem end
+    grad.addColorStop(0.12, '#eab308');
+    grad.addColorStop(0.85, '#facc15');
+    grad.addColorStop(1, '#65a30d'); // green tip
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Longitudinal peel ribs
+    for (let i = 1; i < 5; i++) {
+      const x = (i / 5) * w;
+      ctx.strokeStyle = 'rgba(161, 98, 7, 0.35)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+    // Natural sugar speckles
+    for (let i = 0; i < 120; i++) {
+      ctx.fillStyle = `rgba(113, 63, 18, ${0.4 + Math.random() * 0.4})`;
+      ctx.beginPath();
+      ctx.arc(Math.random() * w, Math.random() * h, 0.8 + Math.random() * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+
+/** Woven cane / wicker basket weave texture. */
+function getWickerTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('wicker_basket', (ctx, w, h) => {
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(0, 0, w, h);
+
+    const step = 16;
+    for (let x = 0; x < w; x += step) {
+      for (let y = 0; y < h; y += step) {
+        const isHorizontal = ((x / step + y / step) % 2) === 0;
+        ctx.fillStyle = isHorizontal ? '#b45309' : '#92400e';
+        ctx.fillRect(x + 1, y + 1, step - 2, step - 2);
+
+        // Shadow crevices
+        ctx.fillStyle = 'rgba(41, 15, 3, 0.6)';
+        ctx.fillRect(x, y, step, 1.5);
+        ctx.fillRect(x, y, 1.5, step);
+
+        // Highlight sheen
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.25)';
+        if (isHorizontal) {
+          ctx.fillRect(x + 2, y + step / 2 - 1, step - 4, 2);
+        } else {
+          ctx.fillRect(x + step / 2 - 1, y + 2, 2, step - 4);
+        }
+      }
+    }
+  });
+}
+
+/** Textured industrial matte pedestal / dark slate granite. */
+function getPedestalTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('pedestal_stone', (ctx, w, h) => {
+    ctx.fillStyle = '#292d39';
+    ctx.fillRect(0, 0, w, h);
+
+    for (let i = 0; i < 1500; i++) {
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      const bright = Math.random() > 0.5;
+      ctx.fillStyle = bright
+        ? `rgba(255, 255, 255, ${0.04 + Math.random() * 0.08})`
+        : `rgba(0, 0, 0, ${0.1 + Math.random() * 0.15})`;
+      ctx.fillRect(x, y, 1.2, 1.2);
+    }
+  });
+}
+
+/** Birch plywood / clean board veneer texture. */
+function getBoardTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('board_birch', (ctx, w, h) => {
+    ctx.fillStyle = '#ebdccb';
+    ctx.fillRect(0, 0, w, h);
+
+    for (let i = 0; i < 150; i++) {
+      const y = Math.random() * h;
+      ctx.strokeStyle = `rgba(180, 140, 100, ${0.05 + Math.random() * 0.1})`;
+      ctx.lineWidth = 0.8 + Math.random() * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= w; x += 20) {
+        ctx.lineTo(x, y + Math.sin(x / 30 + i) * 1.5);
+      }
+      ctx.stroke();
+    }
+  });
+}
+
+/** 3D printed stand texture with 0.2mm layer lines. */
+function get3DPrintedTexture(): THREE.CanvasTexture {
+  return getOrCreateTexture('stand_printed', (ctx, w, h) => {
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(0, 0, w, h);
+
+    for (let y = 0; y < h; y += 3) {
+      ctx.fillStyle = (y % 6 === 0) ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.12)';
+      ctx.fillRect(0, y, w, 1.5);
+    }
+  });
+}
+
+/**
+ * Assign rich textured Three.js materials to MuJoCo geoms based on their semantic identity.
+ */
+function createMaterialForGeom(geomName: string, r: number, g: number, b: number, a: number): THREE.Material {
+  const baseColor = new THREE.Color(r, g, b);
+
+  // 1. Wooden Jenga Block
+  if (geomName.startsWith('block_geom') || geomName === 'block') {
+    const tex = getWoodBlockTexture();
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.55,
+      metalness: 0.05,
+    });
+  }
+
+  // 2. Apple
+  if (geomName.startsWith('apple_') && !geomName.includes('stalk')) {
+    const tex = getAppleTexture();
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.22,
+      metalness: 0.08,
+    });
+  }
+
+  // 3. Orange
+  if (geomName.startsWith('orange_') && !geomName.includes('stalk')) {
+    const tex = getOrangeTexture();
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.45,
+      metalness: 0.04,
+    });
+  }
+
+  // 4. Banana
+  if (geomName.startsWith('banana_')) {
+    const tex = getBananaTexture();
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.35,
+      metalness: 0.05,
+    });
+  }
+
+  // 5. Basket (Woven Wicker)
+  if (geomName.startsWith('basket_')) {
+    const tex = getWickerTexture();
+    tex.repeat.set(2, 2);
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.65,
+      metalness: 0.05,
+    });
+  }
+
+  // 6. Bottle (Translucent Glass & Cap)
+  if (geomName.startsWith('bottle_') && !geomName.includes('cap')) {
+    return new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color(0x38bdf8),
+      transmission: 0.75,
+      opacity: 0.85,
+      transparent: true,
+      roughness: 0.1,
+      metalness: 0.1,
+      ior: 1.5,
+    });
+  }
+  if (geomName.startsWith('bottle_cap')) {
+    return new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0xe2e8f0),
+      metalness: 0.85,
+      roughness: 0.25,
+    });
+  }
+
+  // 7. Stalk / Stems
+  if (geomName.includes('stalk')) {
+    return new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0x451a03),
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+  }
+
+  // 8. Pedestals
+  if (geomName.startsWith('station_pedestal')) {
+    const tex = getPedestalTexture();
+    tex.repeat.set(2, 2);
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.75,
+      metalness: 0.15,
+    });
+  }
+
+  // 9. Boards (Station & Calibration)
+  if (geomName.startsWith('station_board') || geomName.startsWith('board_surface') || geomName.startsWith('board_interior')) {
+    const tex = getBoardTexture();
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.45,
+      metalness: 0.05,
+    });
+  }
+
+  // 10. Boundary Stand 3D Mesh
+  if (geomName.startsWith('boundary_stand')) {
+    const tex = get3DPrintedTexture();
+    tex.repeat.set(3, 3);
+    return new THREE.MeshStandardMaterial({
+      map: tex,
+      color: new THREE.Color(0xffffff),
+      roughness: 0.6,
+      metalness: 0.1,
+    });
+  }
+
+  // Fallback default material with slight specular enhancement
+  return new THREE.MeshStandardMaterial({
+    color: baseColor,
+    metalness: 0.1,
+    roughness: 0.65,
+  });
+}
+
 /**
  * A wooden floor: nicer to look at than a grid, and the grain gives the eye a
  * sense of scale and motion that flat colour doesn't. Drawn procedurally at
@@ -125,9 +490,9 @@ function woodenFloor(): THREE.Mesh {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(6, 6);
+  tex.repeat.set(18, 18);
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(8, 8),
+    new THREE.PlaneGeometry(28, 28),
     new THREE.MeshLambertMaterial({ map: tex }),
   );
   floor.position.z = -0.002; // just under the model's own floor plane, if any
@@ -140,10 +505,8 @@ export class PovView {
   private scene: THREE.Scene;
 
   constructor(canvas: HTMLCanvasElement, scene: THREE.Scene, fovDeg = 46) {
-    // preserveDrawingBuffer: these frames are read back and decoded, so the
-    // buffer has to survive past the render.
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(1); // detection wants exact pixels, not device scaling
+    this.renderer.setPixelRatio(1);
     this.scene = scene;
     this.camera = new THREE.PerspectiveCamera(fovDeg, 4 / 3, 0.01, 100);
     this.camera.up.set(0, 0, 1);
@@ -155,7 +518,6 @@ export class PovView {
 
   /** Aim using an OpenCV pose (x right, y down, z forward). */
   setPose(R: number[], t: [number, number, number]) {
-    // three.js looks down −Z with +Y up, so the basis is x, −y, −z of that one.
     const m = new THREE.Matrix4();
     m.set(
       R[0], -R[1], -R[2], 0,
@@ -185,6 +547,7 @@ export class MujocoRenderer {
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
   private meshes: Array<{ mesh: THREE.Mesh; geomId: number }> = [];
+  private mj?: Mj;
   private model: MjModel;
   private data: MjData;
   private targetMarker: THREE.Mesh;
@@ -192,19 +555,15 @@ export class MujocoRenderer {
 
   private pov: boolean;
 
-  /**
-   * `opts.pov` renders the scene from an explicit camera pose (see setPovPose)
-   * instead of an orbiting one — used to show what the robot's onboard camera
-   * would see when no real camera is attached.
-   */
   constructor(
     canvas: HTMLCanvasElement,
-    _mj: Mj,
+    mj: Mj,
     model: MjModel,
     data: MjData,
     opts: { pov?: boolean } = {},
   ) {
     this.pov = !!opts.pov;
+    this.mj = mj;
     this.model = model;
     this.data = data;
 
@@ -214,18 +573,15 @@ export class MujocoRenderer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x14161a);
 
-    // 46° vertical ≈ a 60° horizontal view at 4:3 — a plausible webcam, and the
-    // same cone simDetect uses to decide what the robot can see.
     this.camera = new THREE.PerspectiveCamera(this.pov ? 46 : 45, 1, 0.01, 100);
-    this.camera.up.set(0, 0, 1); // MuJoCo z-up
-    // Viewpoint chosen from the running app with "Copy view" — keeps the robot,
-    // the board and the station all in frame.
-    this.camera.position.set(1.745, -0.277, 1.234);
+    this.camera.up.set(0, 0, 1);
+    this.camera.position.set(-0.570, 0.189, 1.524);
 
     this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(0.0, -0.1, 0.15);
+    this.controls.target.set(0.309, 0.153, 0.514);
     this.controls.enableDamping = true;
     this.controls.enabled = !this.pov;
+    this.controls.maxDistance = 6.25; // max zoomout derived from cam (-4.311, -0.262, 4.510) and target (0.454, -0.145, 0.468)
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.75));
     const dir = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -235,17 +591,13 @@ export class MujocoRenderer {
 
     this.buildGeoms();
 
-    // Target marker: a cone whose tip is the goal point and whose axis is the
-    // gripper's approach direction, with a square base showing the wrist roll.
     const mat = new THREE.MeshBasicMaterial({ color: 0x22c55e, wireframe: true });
-    const cone = new THREE.ConeGeometry(0.014, 0.045, 4); // 4 sides → square base
-    // Cone points +Y with tip at +h/2; re-aim to +X with tip at the origin.
+    const cone = new THREE.ConeGeometry(0.014, 0.045, 4);
     cone.rotateZ(-Math.PI / 2);
     cone.translate(-0.0225, 0, 0);
     this.targetMarker = new THREE.Mesh(cone, mat);
     this.scene.add(this.targetMarker);
-    // Sphere marker, shown instead of the cone when the target has no orientation
-    // (e.g. the "None" grasp — approach direction unspecified).
+
     this.targetSphere = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 12), mat);
     this.targetSphere.visible = false;
     this.scene.add(this.targetSphere);
@@ -262,7 +614,6 @@ export class MujocoRenderer {
     const group = model.geom_group as Int32Array;
 
     for (let i = 0; i < model.ngeom; i++) {
-      // Skip fully-transparent geoms and collision-only groups (group 3+).
       if (rgba[i * 4 + 3] <= 0) continue;
       if (group[i] >= 3) continue;
       const g = geomGeometry(
@@ -272,11 +623,16 @@ export class MujocoRenderer {
         dataid[i],
       );
       if (!g) continue;
-      const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]),
-        metalness: 0.1,
-        roughness: 0.8,
-      });
+
+      const geomName = this.mj ? (this.mj.mj_id2name(model, 5 /* mjOBJ_GEOM */, i) || '') : '';
+      const mat = createMaterialForGeom(
+        geomName,
+        rgba[i * 4],
+        rgba[i * 4 + 1],
+        rgba[i * 4 + 2],
+        rgba[i * 4 + 3],
+      );
+
       const mesh = new THREE.Mesh(g, mat);
       this.scene.add(mesh);
       this.meshes.push({ mesh, geomId: i });

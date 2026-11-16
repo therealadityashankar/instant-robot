@@ -26,7 +26,7 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 const RPC_TIMEOUT_MS = 5000;
-const CONNECT_TIMEOUT_MS = 15000;
+const CONNECT_TIMEOUT_MS = 30000;
 
 export interface RemoteRobotOptions {
   /** e.g. "wss://instant.river.berlin" — same origin as the app in production. */
@@ -125,12 +125,15 @@ export class RemoteRobot {
         } catch {
           return;
         }
+        console.log('[RemoteRobot Signalling Rx]', m.type, JSON.stringify(m));
         try {
           if (m.type === 'error') {
             fail(m.reason);
           } else if (m.type === 'ready') {
+            console.log('[RemoteRobot] ready message: peerPresent =', m.peerPresent);
             if (m.peerPresent) await this.makeOffer(pc, ws);
           } else if (m.type === 'peer-joined') {
+            console.log('[RemoteRobot] peer-joined message! Role:', m.role);
             await this.makeOffer(pc, ws);
           } else if (m.type === 'answer') {
             await pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
@@ -153,17 +156,21 @@ export class RemoteRobot {
         }
       };
       rpcChan.onopen = () => {
+        console.log('[RemoteRobot] rpcChan open!');
         rpcOpen = true;
         maybeDone();
       };
       streamChan.onopen = () => {
+        console.log('[RemoteRobot] streamChan open!');
         streamOpen = true;
         maybeDone();
       };
     });
 
+    console.log('[RemoteRobot] Data channels open! Sending hello RPC...');
     this.connected = true;
     this.info = await this.rpc<HelloResult>('hello');
+    console.log('[RemoteRobot] hello RPC reply received:', this.info);
     if (this.info.version !== PROTOCOL_VERSION) {
       // Not fatal — best-effort forward compatibility — but worth surfacing.
       console.warn(
@@ -173,9 +180,11 @@ export class RemoteRobot {
   }
 
   private async makeOffer(pc: RTCPeerConnection, ws: WebSocket) {
+    console.log('[RemoteRobot] Creating and sending WebRTC offer...');
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp } satisfies SignalMessage));
+    console.log('[RemoteRobot] Offer sent to signaling WS!');
   }
 
   private lastVideoLog = 0;

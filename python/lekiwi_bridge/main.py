@@ -119,6 +119,16 @@ async def handle_rpc(
         if op == "stopAll":
             await bus.stop_all(cfg.wheel_ids)
             return rpc_ok(rid)
+        if op == "reconnectBus":
+            ok = await bus.reconnect()
+            found = await bus.probe(range(1, 16)) if ok else []
+            if ok and found:
+                await bus.write_torque_enable(cfg.arm_ids, True)
+                if cfg.wheel_ids:
+                    await bus.set_wheel_mode(cfg.wheel_ids)
+                servos.clear()
+                servos.extend(found)
+            return rpc_ok(rid, {"ok": ok, "port": getattr(bus, "_port_name", "unknown"), "servos": servos})
         if op == "setActiveCamera":
             idx = cam_mgr.set_active(int(args.get("camera", 0)))
             return rpc_ok(rid, {"activeCamera": idx, "hardwareCameras": len(cam_mgr.cameras)})
@@ -133,14 +143,24 @@ async def run_async() -> None:
     _disable_wifi_power_save()
 
     bus = ServoBus(cfg.serial_port, cfg.baud)
-    await bus.connect()
-    log.info("bus connected on %s @ %d baud", cfg.serial_port, cfg.baud)
+    servos: list[int] = list(cfg.arm_ids + cfg.wheel_ids)
 
-    servos = await bus.probe(range(1, 16))
-    log.info("servos found: %s", servos)
-    await bus.write_torque_enable(cfg.arm_ids, True)
-    if cfg.wheel_ids:
-        await bus.set_wheel_mode(cfg.wheel_ids)
+    async def _init_bus():
+        nonlocal servos
+        try:
+            await bus.connect()
+            log.info("bus connected on %s @ %d baud", bus._port_name, cfg.baud)
+            found = await bus.probe(range(1, 16))
+            if found:
+                servos = found
+                log.info("servos probed ok: %s", servos)
+                await bus.write_torque_enable(cfg.arm_ids, True)
+                if cfg.wheel_ids:
+                    await bus.set_wheel_mode(cfg.wheel_ids)
+        except Exception as e:
+            log.warning("background bus init warning: %s", e)
+
+    asyncio.create_task(_init_bus())
 
     watchdog = Watchdog(bus, cfg.wheel_ids, cfg.watchdog_s)
     watchdog.start()
@@ -178,57 +198,63 @@ async def run_async() -> None:
                 speeds = {int(sid): int(spd) for sid, spd in msg.get("speeds", [])}
                 asyncio.ensure_future(bus.sync_write_wheel_speed(speeds))
 
-    cam_tasks: list[asyncio.Task] = []
-
     def on_video_open(channel):
-        log.info("video channel open, streaming active camera (%d hardware cameras)", len(cam_mgr.cameras))
-        cam_tasks.append(asyncio.ensure_future(_stream_camera(channel, cam_mgr)))
+        log.info("video data channel open (primary streaming via Cloudflare Edge WebSocket)")
 
-    async def _stream_camera(channel, cam_mgr: CameraManager):
-        seq = 0
-        sent = 0
-        while channel.readyState == "open":
-            if not cam_mgr.cameras:
-                cam_mgr.rescan()
-                if not cam_mgr.cameras:
-                    await asyncio.sleep(0.5)
-                    continue
-            idx = cam_mgr.active_index
-            if not (0 <= idx < len(cam_mgr.cameras)):
-                idx = 0
-            cam = cam_mgr.cameras[idx]
-            cam_mgr.changed.clear()
-            virt_idx = getattr(cam_mgr, "virtual_index", idx)
+    async def _stream_camera_ws(cam_mgr: CameraManager, ws_url: str):
+        import websockets
+        seqs = [0, 0]
+        while True:
             try:
-                async for jpeg in cam.frames():
-                    if channel.readyState != "open" or cam_mgr.changed.is_set():
-                        break
+                log.info("connecting video websocket to Cloudflare Edge: %s", ws_url)
+                async with websockets.connect(
+                    ws_url,
+                    max_size=MAX_VIDEO_FRAME * 2,
+                    ping_interval=15,
+                    ping_timeout=20,
+                    close_timeout=5,
+                ) as ws:
+                    log.info("video websocket connected to Cloudflare Edge!")
 
-                    if len(jpeg) > MAX_VIDEO_FRAME:
-                        log.warning(
-                            "camera %d: frame too large (%d bytes > %d), dropping", virt_idx, len(jpeg), MAX_VIDEO_FRAME
-                        )
-                        continue
+                    async def stream_single(cam_idx: int):
+                        while True:
+                            if cam_idx >= len(cam_mgr.cameras):
+                                await asyncio.sleep(0.5)
+                                continue
+                            cam = cam_mgr.cameras[cam_idx]
+                            virt_idx = getattr(cam_mgr, f"virtual_index_{cam_idx}", cam_idx)
+                            try:
+                                async for jpeg in cam.frames():
+                                    if len(jpeg) > MAX_VIDEO_FRAME:
+                                        continue
+                                    await ws.send(encode_video_frame(virt_idx, seqs[cam_idx], jpeg))
+                                    seqs[cam_idx] += 1
+                                    if seqs[cam_idx] == 1 or seqs[cam_idx] % 20 == 0:
+                                        log.info("Tx WS frame: cam=%d (hw=%d) seq=%d size=%d B", virt_idx, cam_idx, seqs[cam_idx] - 1, len(jpeg))
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as e:
+                                log.warning("camera %d frame stream error: %s (reconnecting)", cam_idx, e)
+                                raise
 
-                    # Backpressure: never let the SCTP send queue swell
-                    buf_amt = getattr(channel, "bufferedAmount", 0)
-                    if buf_amt > 65536:
-                        log.debug("video channel backpressure (buffered %d B), dropping frame cam=%d", buf_amt, virt_idx)
-                        continue
-
-                    try:
-                        channel.send(encode_video_frame(virt_idx, seq, jpeg))
-                        seq += 1
-                        sent += 1
-                        if sent == 1 or sent % 10 == 0:
-                            log.info("Tx frame: cam=%d (hw=%d) seq=%d size=%d B (buffered=%d)", virt_idx, idx, seq - 1, len(jpeg), buf_amt)
-                    except Exception as e:
-                        log.error("channel.send failed on cam %d seq %d: %s", virt_idx, seq, e)
+                    tasks = [
+                        asyncio.create_task(stream_single(0)),
+                        asyncio.create_task(stream_single(1)),
+                    ]
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+                    for t in pending:
+                        t.cancel()
+                    for t in done:
+                        if t.exception():
+                            raise t.exception()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.warning("camera %d stream error: %s (retrying in 0.5s)", idx, e)
-                await asyncio.sleep(0.5)
+                log.warning("video websocket reconnecting in 2s (%s)...", e)
+                await asyncio.sleep(2.0)
+
+    cf_ws_url = f"wss://lekiwi-video-relay.theadityashankar.workers.dev/?room={cfg.room}&role=robot"
+    asyncio.ensure_future(_stream_camera_ws(cam_mgr, cf_ws_url))
 
     try:
         # A robot bridge should sit there waiting to be driven, not exit because
@@ -248,30 +274,19 @@ async def run_async() -> None:
                 # Wheels must not keep their last commanded speed across a
                 # dropped session.
                 await bus.stop_all(cfg.wheel_ids)
-                await asyncio.sleep(5)
+                await asyncio.sleep(1.5)
                 continue
 
             log.info("peer connected — bridge is live")
             await peer.wait_closed()
             log.info("peer disconnected; waiting for a new session")
-            for t in cam_tasks:
-                t.cancel()
-            if cam_tasks:
-                await asyncio.gather(*cam_tasks, return_exceptions=True)
-            cam_tasks.clear()
             await bus.stop_all(cfg.wheel_ids)
             await peer.close()
     finally:
         watchdog.stop()
-        # Stop the capture loops before closing the devices they're reading, or
-        # their deferred generator cleanup runs ioctls on a closed fd.
-        for t in cam_tasks:
-            t.cancel()
-        if cam_tasks:
-            await asyncio.gather(*cam_tasks, return_exceptions=True)
         await bus.stop_all(cfg.wheel_ids)
         await bus.write_torque_enable(cfg.arm_ids, False)
-        for cam in cameras:
+        for cam in cam_mgr.cameras:
             cam.close()
         if peer is not None:
             await peer.close()

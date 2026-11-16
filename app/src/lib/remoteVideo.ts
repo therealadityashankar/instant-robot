@@ -65,6 +65,37 @@ export class RemoteCameraSink {
     }
   }
 
+  connectWebSocket(url: string): () => void {
+    let ws: WebSocket | null = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onmessage = async (event) => {
+      let buf: Uint8Array;
+      if (event.data instanceof ArrayBuffer) {
+        buf = new Uint8Array(event.data);
+      } else if (event.data instanceof Blob) {
+        const ab = await event.data.arrayBuffer();
+        buf = new Uint8Array(ab);
+      } else {
+        return;
+      }
+      if (buf.length > 5) {
+        const cam = buf[0];
+        const jpeg = buf.subarray(5);
+        void this.push(cam, jpeg);
+      }
+    };
+
+    ws.onerror = (e) => console.warn('Video WebSocket error:', e);
+
+    return () => {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+    };
+  }
+
   clear(): void {
     this.canvases.clear();
     this.decoding.clear();

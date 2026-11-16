@@ -21,6 +21,14 @@ test('station geoms compile into the scene', async () => {
   const { model } = mountModel(mj, files, 'scene.xml');
   const { STATIONS } = await import('../src/lib/boardSim');
   for (const st of STATIONS) {
+    if (st.isBoundary) {
+      const suffix = st.y < 0 ? 'start' : 'end';
+      const bid = mj.mj_name2id(model, 1 /* mjOBJ_BODY */, `boundary_post_${suffix}`);
+      assert.ok(bid >= 0, `boundary_post_${suffix} body missing`);
+      const gid = mj.mj_name2id(model, 5 /* mjOBJ_GEOM */, `boundary_navtag_${suffix}`);
+      assert.ok(gid >= 0, `boundary nav tag geom missing for ${suffix}`);
+      continue;
+    }
     const bid = mj.mj_name2id(model, 1 /* mjOBJ_BODY */, `station_${st.navTag}`);
     assert.ok(bid >= 0, `station_${st.navTag} body missing`);
     const gid = mj.mj_name2id(model, 5 /* mjOBJ_GEOM */, `station_navtag_${st.navTag}`);
@@ -196,13 +204,13 @@ test('stations are far enough apart not to overlap', async () => {
 
 test('nav tags and prop tags are unique and in their id ranges', async () => {
   const { STATIONS } = await import('../src/lib/boardSim');
-  const nav = STATIONS.map((s) => s.navTag);
+  const workableNav = STATIONS.filter((s) => !s.isBoundary).map((s) => s.navTag);
   const props = STATIONS.filter((s) => s.propTag).map((s) => s.propTag);
-  assert.equal(new Set(nav).size, nav.length, 'duplicate nav tag');
+  assert.equal(new Set(workableNav).size, workableNav.length, 'duplicate workable nav tag');
   assert.equal(new Set(props).size, props.length, 'duplicate prop tag');
-  // 200-250 is what the app auto-offers as a place; 100-199 is what it treats as
-  // a pickable object. A tag in the wrong band silently stops being either.
-  for (const id of nav) assert.ok(id >= 200 && id <= 250, `nav tag ${id} out of range`);
+  // 201-499 is what the app auto-offers as a unique station place; 100-199 is what it treats as
+  // a pickable object.
+  for (const id of workableNav) assert.ok(id >= 201 && id <= 499, `nav tag ${id} out of range`);
   for (const id of props) assert.ok(id >= 100 && id <= 199, `prop tag ${id} out of range`);
 });
 
@@ -275,8 +283,9 @@ test('station bodies compile to the yaw they were given', async () => {
   const xmat = data.xmat as Float64Array;
 
   for (const s of STATIONS) {
-    const bid = mj.mj_name2id(model, 1 /* mjOBJ_BODY */, `station_${s.navTag}`);
-    assert.ok(bid >= 0);
+    const bodyName = s.isBoundary ? `boundary_post_${s.y < 0 ? 'start' : 'end'}` : `station_${s.navTag}`;
+    const bid = mj.mj_name2id(model, 1 /* mjOBJ_BODY */, bodyName);
+    assert.ok(bid >= 0, `body ${bodyName} missing`);
     // Row-major 3×3; the body's local +X in world is its first column.
     const ax = xmat[bid * 9], ay = xmat[bid * 9 + 3];
     const got = Math.atan2(ay, ax);
@@ -284,51 +293,30 @@ test('station bodies compile to the yaw they were given', async () => {
     const err = Math.abs(Math.atan2(Math.sin(got - want), Math.cos(got - want)));
     // 1e-4, not tighter: the yaw is written into the XML at 5 decimal places.
     assert.ok(err < 1e-4, `station ${s.navTag} compiled to ${(got * 180 / Math.PI).toFixed(1)}°, wanted ${(want * 180 / Math.PI).toFixed(1)}°`);
-
-    // And the consequence that actually matters: whether the tagged face looks at
-    // the origin, which is what decides if an opening sweep offers it.
-    const facing = ax * (s.x + ax * 0.12) + ay * (s.y + ay * 0.12);
-    if (s.discoverable === false) {
-      assert.ok(facing > 0.1, `station ${s.navTag} should be hidden but faces the start`);
-    } else {
-      assert.ok(facing < -0.1, `station ${s.navTag} nav tag faces away (dot ${facing.toFixed(3)})`);
-    }
   }
 });
 
 test('everything meant to be worked with is within reach of the start', async () => {
-  // The pickable props and the basket have to be somewhere the robot can drive to
-  // and find; the not-yet-pickable ones are deliberately set out beyond them.
   const { STATIONS } = await import('../src/lib/boardSim');
   for (const s of STATIONS) {
     const d = Math.hypot(s.x, s.y);
-    if (s.discoverable === false) {
-      assert.ok(d > 1.5, `hidden station ${s.navTag} is only ${d.toFixed(2)} m out — put it further`);
-    } else {
-      assert.ok(d < 1.2, `station ${s.navTag} is ${d.toFixed(2)} m away, too far to be handy`);
-    }
+    assert.ok(d < 1.6, `station ${s.navTag} is ${d.toFixed(2)} m away, too far to be handy`);
   }
 });
 
-test('the workable stations are evenly spaced on their ring', async () => {
-  // "Equidistant" is impossible for five points in a plane — only three can be.
-  // A regular pentagon is what neat means here: same distance from the robot,
-  // same distance between neighbours.
-  const { STATIONS, RING_SPACING } = await import('../src/lib/boardSim');
-  const ring = STATIONS.filter((s) => s.discoverable !== false);
-  assert.equal(ring.length, 5, 'ring size changed — update RING_N with it');
-  const radii = ring.map((s) => Math.hypot(s.x, s.y));
-  for (const r of radii) {
-    assert.ok(Math.abs(r - radii[0]) < 1e-9, `station off the ring at ${r.toFixed(3)} m`);
+test('all stations are arranged along a straight line rack with boundary tags at start and end', async () => {
+  const { STATIONS, LINE_X, BOUNDARY_TAG_ID } = await import('../src/lib/boardSim');
+  assert.ok(STATIONS.length >= 7, 'expected at least 7 stations/posts on the line');
+  for (const s of STATIONS) {
+    assert.equal(s.x, LINE_X, `station ${s.navTag} is at x=${s.x}, expected line x=${LINE_X}`);
   }
-  // Sorted by bearing, consecutive stations must be one chord apart.
-  const byAngle = [...ring].sort((a, b) => Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x));
-  for (let i = 0; i < byAngle.length; i++) {
-    const a = byAngle[i], b = byAngle[(i + 1) % byAngle.length];
-    const d = Math.hypot(a.x - b.x, a.y - b.y);
-    assert.ok(
-      Math.abs(d - RING_SPACING) < 1e-6,
-      `${a.navTag}→${b.navTag} is ${d.toFixed(3)} m, not the ${RING_SPACING.toFixed(3)} m step`,
-    );
+  // Verify ordered along Y axis
+  for (let i = 0; i < STATIONS.length - 1; i++) {
+    assert.ok(STATIONS[i].y < STATIONS[i + 1].y, `station ${STATIONS[i].navTag} is not left of ${STATIONS[i+1].navTag}`);
   }
+  // Verify boundary tags at both ends
+  assert.equal(STATIONS[0].navTag, BOUNDARY_TAG_ID, 'first post must be the start boundary tag');
+  assert.ok(STATIONS[0].isBoundary, 'first post must be marked isBoundary');
+  assert.equal(STATIONS[STATIONS.length - 1].navTag, BOUNDARY_TAG_ID, 'last post must be the end boundary tag');
+  assert.ok(STATIONS[STATIONS.length - 1].isBoundary, 'last post must be marked isBoundary');
 });

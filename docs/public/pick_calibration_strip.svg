@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1122.519816 793.70088" width="297mm" height="210mm" style="background:#ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <style>
+    .title { font-size: 16px; font-weight: bold; fill: #0f172a; }
+    .subtitle { font-size: 11px; fill: #475569; }
+    .tag-label { font-size: 12px; font-family: monospace; font-weight: bold; fill: #0f172a; text-anchor: middle; }
+    .dot-label { font-size: 9px; font-family: monospace; font-weight: bold; fill: #dc2626; text-anchor: middle; }
+    .dim-label { font-size: 9px; font-family: monospace; fill: #64748b; text-anchor: middle; }
+    .ruler-text { font-size: 9px; font-family: monospace; font-weight: bold; fill: #0f172a; text-anchor: middle; }
+    .instr { font-size: 10px; fill: #64748b; text-anchor: middle; }
+  </style>
+
+  <!-- Page Border & Cut Guidelines -->
+  <rect x="56.69292" y="56.69292" width="1009.133976" height="680.31504" fill="none" stroke="#0284c7" stroke-width="2" rx="8" />
+
+  <!-- Header -->
+  <text x="83.149616" y="94.4882" class="title">LEKIWI ROBOT — PICK OFFSET &amp; VISION ALIGNMENT STRIP</text>
+  <text x="83.149616" y="113.38584" class="subtitle">ArUco Dictionary DICT_6X6_250 · Marker Size: 30 mm · Target Dot Offset: 25 mm Left · Print Scale: 100% (Actual Size)</text>
+
+  <!-- 50 mm Calibration Verification Ruler -->
+  <g transform="translate(839.055216, 83.149616)">
+    <text x="94.4882" y="-4" class="ruler-text">50 mm Scale Check</text>
+    <line x1="0" y1="0" x2="188.9764" y2="0" stroke="#0f172a" stroke-width="1.5" />
+    <line x1="0" y1="-5" x2="0" y2="5" stroke="#0f172a" stroke-width="1.5" />
+    <line x1="94.4882" y1="-3" x2="94.4882" y2="3" stroke="#0f172a" stroke-width="1" />
+    <line x1="188.9764" y1="-5" x2="188.9764" y2="5" stroke="#0f172a" stroke-width="1.5" />
+  </g>
+
+  <!-- Continuous Straight Horizontal Baseline -->
+  <line x1="75.59056" y1="396.85044" x2="1046.929256" y2="396.85044" stroke="#0284c7" stroke-width="1" stroke-dasharray="6,4" opacity="0.6" />
+
+  <!-- === UNIT 1: TAG #201 + TARGET DOT === -->
+  <!-- Target Dot -->
+  <circle cx="162.992145" cy="396.85044" r="13.228348" fill="none" stroke="#dc2626" stroke-width="1.5" />
+  <circle cx="162.992145" cy="396.85044" r="6.8031504" fill="none" stroke="#0f172a" stroke-width="1" />
+  <circle cx="162.992145" cy="396.85044" r="3.0236224000000003" fill="#dc2626" />
+  <line x1="142.20474099999998" y1="396.85044" x2="183.779549" y2="396.85044" stroke="#dc2626" stroke-width="0.8" />
+  <line x1="162.992145" y1="376.063036" x2="162.992145" y2="417.637844" stroke="#dc2626" stroke-width="0.8" />
+  <text x="162.992145" y="423.307136" class="dot-label">TARGET DOT</text>
+  <text x="162.992145" y="434.64572" class="dot-label" style="font-size:8px; fill:#64748b;">(Left Finger)</text>
+  <!-- Dimension Leader -->
+  <line x1="162.992145" y1="366.614216" x2="257.480345" y2="366.614216" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2,2" />
+  <line x1="162.992145" y1="359.05516" x2="162.992145" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <line x1="257.480345" y1="359.05516" x2="257.480345" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <text x="210.236245" y="360.944924" class="dim-label">25 mm</text>
+  <!-- Marker #201 -->
+  <!-- Tag #201 -->
+<rect x="200.78742499999998" y="340.15752" width="113.38584" height="113.38584" fill="#000000" />
+<rect x="243.30711499999998" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="257.480345" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="271.653575" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="214.96065499999997" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="271.653575" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="243.30711499999998" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="271.653575" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="243.30711499999998" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="257.480345" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="271.653575" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="257.480345" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="285.826805" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="214.96065499999997" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="229.133885" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="257.480345" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="285.826805" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+
+  <!-- Top orientation arrow -->
+  <polygon points="257.480345,328.81893599999995 249.921289,336.37799199999995 265.039401,336.37799199999995" fill="#0284c7" />
+  <text x="257.480345" y="472.44100000000003" class="tag-label">ID #201</text>
+
+  <!-- === UNIT 2: TAG #202 + TARGET DOT === -->
+  <!-- Target Dot -->
+  <circle cx="405.826819" cy="396.85044" r="13.228348" fill="none" stroke="#dc2626" stroke-width="1.5" />
+  <circle cx="405.826819" cy="396.85044" r="6.8031504" fill="none" stroke="#0f172a" stroke-width="1" />
+  <circle cx="405.826819" cy="396.85044" r="3.0236224000000003" fill="#dc2626" />
+  <line x1="385.039415" y1="396.85044" x2="426.614223" y2="396.85044" stroke="#dc2626" stroke-width="0.8" />
+  <line x1="405.826819" y1="376.063036" x2="405.826819" y2="417.637844" stroke="#dc2626" stroke-width="0.8" />
+  <text x="405.826819" y="423.307136" class="dot-label">TARGET DOT</text>
+  <text x="405.826819" y="434.64572" class="dot-label" style="font-size:8px; fill:#64748b;">(Left Finger)</text>
+  <!-- Dimension Leader -->
+  <line x1="405.826819" y1="366.614216" x2="500.315019" y2="366.614216" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2,2" />
+  <line x1="405.826819" y1="359.05516" x2="405.826819" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <line x1="500.315019" y1="359.05516" x2="500.315019" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <text x="453.070919" y="360.944924" class="dim-label">25 mm</text>
+  <!-- Marker #202 -->
+  <!-- Tag #202 -->
+<rect x="443.622099" y="340.15752" width="113.38584" height="113.38584" fill="#000000" />
+<rect x="486.141789" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="500.315019" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="514.488249" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="528.661479" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="457.795329" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="528.661479" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="486.141789" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="500.315019" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="514.488249" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="457.795329" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="471.96855899999997" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="486.141789" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="500.315019" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="528.661479" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="471.96855899999997" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="486.141789" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+
+  <!-- Top orientation arrow -->
+  <polygon points="500.315019,328.81893599999995 492.755963,336.37799199999995 507.874075,336.37799199999995" fill="#0284c7" />
+  <text x="500.315019" y="472.44100000000003" class="tag-label">ID #202</text>
+
+  <!-- === UNIT 3: TAG #203 + TARGET DOT === -->
+  <!-- Target Dot -->
+  <circle cx="648.661493" cy="396.85044" r="13.228348" fill="none" stroke="#dc2626" stroke-width="1.5" />
+  <circle cx="648.661493" cy="396.85044" r="6.8031504" fill="none" stroke="#0f172a" stroke-width="1" />
+  <circle cx="648.661493" cy="396.85044" r="3.0236224000000003" fill="#dc2626" />
+  <line x1="627.8740889999999" y1="396.85044" x2="669.448897" y2="396.85044" stroke="#dc2626" stroke-width="0.8" />
+  <line x1="648.661493" y1="376.063036" x2="648.661493" y2="417.637844" stroke="#dc2626" stroke-width="0.8" />
+  <text x="648.661493" y="423.307136" class="dot-label">TARGET DOT</text>
+  <text x="648.661493" y="434.64572" class="dot-label" style="font-size:8px; fill:#64748b;">(Left Finger)</text>
+  <!-- Dimension Leader -->
+  <line x1="648.661493" y1="366.614216" x2="743.149693" y2="366.614216" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2,2" />
+  <line x1="648.661493" y1="359.05516" x2="648.661493" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <line x1="743.149693" y1="359.05516" x2="743.149693" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <text x="695.905593" y="360.944924" class="dim-label">25 mm</text>
+  <!-- Marker #203 -->
+  <!-- Tag #203 -->
+<rect x="686.456773" y="340.15752" width="113.38584" height="113.38584" fill="#000000" />
+<rect x="728.976463" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="743.149693" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="757.322923" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="771.496153" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="728.976463" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="771.496153" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="700.630003" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="771.496153" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="757.322923" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="771.496153" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="700.630003" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="714.803233" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="757.322923" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="700.630003" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="757.322923" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+
+  <!-- Top orientation arrow -->
+  <polygon points="743.149693,328.81893599999995 735.5906369999999,336.37799199999995 750.708749,336.37799199999995" fill="#0284c7" />
+  <text x="743.149693" y="472.44100000000003" class="tag-label">ID #203</text>
+
+  <!-- === UNIT 4: TAG #204 + TARGET DOT === -->
+  <!-- Target Dot -->
+  <circle cx="891.496167" cy="396.85044" r="13.228348" fill="none" stroke="#dc2626" stroke-width="1.5" />
+  <circle cx="891.496167" cy="396.85044" r="6.8031504" fill="none" stroke="#0f172a" stroke-width="1" />
+  <circle cx="891.496167" cy="396.85044" r="3.0236224000000003" fill="#dc2626" />
+  <line x1="870.708763" y1="396.85044" x2="912.283571" y2="396.85044" stroke="#dc2626" stroke-width="0.8" />
+  <line x1="891.496167" y1="376.063036" x2="891.496167" y2="417.637844" stroke="#dc2626" stroke-width="0.8" />
+  <text x="891.496167" y="423.307136" class="dot-label">TARGET DOT</text>
+  <text x="891.496167" y="434.64572" class="dot-label" style="font-size:8px; fill:#64748b;">(Left Finger)</text>
+  <!-- Dimension Leader -->
+  <line x1="891.496167" y1="366.614216" x2="985.984367" y2="366.614216" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2,2" />
+  <line x1="891.496167" y1="359.05516" x2="891.496167" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <line x1="985.984367" y1="359.05516" x2="985.984367" y2="374.173272" stroke="#94a3b8" stroke-width="1" />
+  <text x="938.740267" y="360.944924" class="dim-label">25 mm</text>
+  <!-- Marker #204 -->
+  <!-- Tag #204 -->
+<rect x="929.2914470000001" y="340.15752" width="113.38584" height="113.38584" fill="#000000" />
+<rect x="971.811137" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="985.984367" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="1000.1575970000001" y="354.33074999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="957.637907" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="985.984367" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="1014.330827" y="368.50397999999996" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="943.464677" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="1000.1575970000001" y="382.67720999999995" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="957.637907" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="971.811137" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="985.984367" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="1014.330827" y="396.85044" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="985.984367" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="1014.330827" y="411.02367" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="943.464677" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="957.637907" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="971.811137" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+<rect x="1014.330827" y="425.19689999999997" width="14.17323" height="14.17323" fill="#ffffff" />
+
+  <!-- Top orientation arrow -->
+  <polygon points="985.984367,328.81893599999995 978.425311,336.37799199999995 993.5434230000001,336.37799199999995" fill="#0284c7" />
+  <text x="985.984367" y="472.44100000000003" class="tag-label">ID #204</text>
+
+  <!-- Footer Instructions -->
+  <text x="561.259908" y="710.551264" class="instr">
+    1. Print at 100% scale (no page scaling / fit to page). Check the 50 mm verification ruler with a physical calipers/ruler.
+  </text>
+  <text x="561.259908" y="725.6693759999999" class="instr">
+    2. Place robot in front of strip → Open Calibration "5 · Pick Offset" → Jog robot arm until left gripper finger pad rests on red target dot → Click "Save Pick Offset".
+  </text>
+</svg>

@@ -116,9 +116,10 @@ function collectReferenced(node: any, out: Set<string>) {
     if (n.type === 'Identifier') {
       const isProperty = parent?.type === 'MemberExpression' && key === 'property' && !parent.computed;
       const isKey = parent?.type === 'Property' && key === 'key' && !parent.computed;
+      const isMeta = parent?.type === 'MetaProperty';
       const isLabel = parent?.type === 'LabeledStatement' || parent?.type === 'BreakStatement' ||
         parent?.type === 'ContinueStatement';
-      if (!isProperty && !isKey && !isLabel) out.add(n.name);
+      if (!isProperty && !isKey && !isMeta && !isLabel) out.add(n.name);
       return;
     }
     for (const k of Object.keys(n)) {

@@ -1,0 +1,13 @@
+name = "lekiwi-video-relay"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+account_id = "5429a1a92a69095def4f8f60134c70ac"
+
+[durable_objects]
+bindings = [
+  { name = "ROOMS", class_name = "VideoRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VideoRoom"]

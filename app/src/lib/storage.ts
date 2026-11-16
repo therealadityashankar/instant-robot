@@ -72,11 +72,41 @@ export interface RemoteRobotConfig {
   token: string;
 }
 
-export function saveRemoteConfig(c: RemoteRobotConfig) {
-  write(REMOTE_CFG_KEY, c);
+export function saveRemoteConfig(cfg: { room: string; token: string }) {
+  write(REMOTE_CFG_KEY, cfg);
 }
 
-export function loadRemoteConfig(): RemoteRobotConfig | null {
-  const d = read<RemoteRobotConfig>(REMOTE_CFG_KEY);
-  return d && typeof d.room === 'string' && typeof d.token === 'string' ? d : null;
+const AUTO_CONNECT_KEY = 'instant-robot:auto-connect';
+
+export function saveAutoConnect(enabled: boolean) {
+  write(AUTO_CONNECT_KEY, enabled);
+}
+
+export function loadAutoConnect(): boolean {
+  return read<boolean>(AUTO_CONNECT_KEY) === true;
+}
+
+export function loadRemoteConfig(): { room: string; token: string } | null {
+  const d = read<{ room?: string; token?: string }>(REMOTE_CFG_KEY);
+  if (d && typeof d.room === 'string' && typeof d.token === 'string') {
+    return { room: d.room, token: d.token };
+  }
+  return null;
+}
+
+import type { PickCalibration } from './pickCalibration';
+import { DEFAULT_PICK_CALIBRATION } from './pickCalibration';
+
+const PICK_CAL_KEY = 'instant-robot:pick-calibration';
+
+export function savePickCalibration(c: PickCalibration) {
+  write(PICK_CAL_KEY, c);
+}
+
+export function loadPickCalibration(): PickCalibration {
+  const d = read<PickCalibration>(PICK_CAL_KEY);
+  if (d && typeof d.xOffsetMm === 'number' && typeof d.yOffsetMm === 'number' && typeof d.zOffsetMm === 'number') {
+    return { ...DEFAULT_PICK_CALIBRATION, ...d };
+  }
+  return { ...DEFAULT_PICK_CALIBRATION };
 }

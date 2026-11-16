@@ -26,7 +26,11 @@ export function markerCanvas(
   sidePx = 256,
   borderBits = 1,
 ): HTMLCanvasElement {
-  const dict = cv.getPredefinedDictionary(dictId);
+  let effectiveDictId = dictId;
+  if (dictId === cv.DICT_6X6_250 && id >= 250 && cv.DICT_6X6_1000 !== undefined) {
+    effectiveDictId = cv.DICT_6X6_1000;
+  }
+  const dict = cv.getPredefinedDictionary(effectiveDictId);
   const mat = new cv.Mat();
   try {
     dict.generateImageMarker(id, sidePx, mat, borderBits);
@@ -46,6 +50,23 @@ export function markerCanvas(
       img.data[i * 4 + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
+    return c;
+  } catch (err) {
+    console.warn(`[markerCanvas] Failed to generate marker ${id} from dict ${dictId}:`, err);
+    // Draw clean fallback high-contrast square marker
+    const c = document.createElement('canvas');
+    c.width = sidePx;
+    c.height = sidePx;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, sidePx, sidePx);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(sidePx * 0.2, sidePx * 0.2, sidePx * 0.6, sidePx * 0.6);
+    ctx.fillStyle = '#000000';
+    ctx.font = `bold ${Math.round(sidePx * 0.25)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${id}`, sidePx / 2, sidePx / 2);
     return c;
   } finally {
     mat.delete();

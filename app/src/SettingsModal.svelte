@@ -31,17 +31,67 @@
         <input
           id="setwheel"
           type="number"
-          step="25"
-          bind:value={baseLink.config.speed}
-          onchange={() => baseLink.persist()}
+          value={baseLink.config.speed}
+          disabled
+          readonly
+          title="Fixed standard wheel speed calibrated for stable visual servoing."
         />
-        <span class="val">units</span>
+        <span class="val">{baseLink.config.speed} units (locked)</span>
       </div>
       <p class="hint">
-        Raw Feetech wheel speed used for driving and for the direction-calibration pulses. Wheel
-        IDs and drive directions live under <em>Calibrate → Base</em>.
+        Standard Feetech wheel speed ({baseLink.config.speed} units) calibrated for stable omnidirectional visual servoing.
       </p>
 
+      <h3>Navigation &amp; Standoff Tuning</h3>
+      <div class="row">
+        <label for="setscanstandoff">Scan Standoff (Tag Side Size)</label>
+        <input
+          id="setscanstandoff"
+          type="range"
+          min="16"
+          max="96"
+          step="2"
+          value={settings.scanTagSidePx}
+          oninput={(e) => (settings.scanTagSidePx = parseInt((e.currentTarget as HTMLInputElement).value, 10))}
+        />
+        <span class="val">{settings.scanTagSidePx} px ({(settings.tagCameraRatio * 100).toFixed(1)}%)</span>
+      </div>
+      <p class="hint">
+        Target ArUco marker side-size on camera during exploration sweeps. The robot adjusts forward/backward standoff until the marker matches this width, ensuring optimal camera FOV for OCR scanning.
+      </p>
+
+      <div class="row">
+        <label for="setworkstandoff">Work / Pick Forward Time</label>
+        <input
+          id="setworkstandoff"
+          type="range"
+          min="0.0"
+          max="12.0"
+          step="0.05"
+          value={settings.navWorkForwardSec}
+          oninput={(e) => settings.setNavWorkForwardSec(parseFloat((e.currentTarget as HTMLInputElement).value))}
+        />
+        <span class="val">{settings.navWorkForwardSec.toFixed(2)} s</span>
+      </div>
+      <p class="hint">
+        Time in seconds the robot advances forward after laterally centering on the station's visual tag group. Can be set to 0.00s to stop right at visual lock, or increased to dock closer for arm reach.
+      </p>
+
+      <div class="row">
+        <label for="setmaxtagpx">Max tag size cutoff</label>
+        <input
+          id="setmaxtagpx"
+          type="range"
+          min="50"
+          max="240"
+          step="5"
+          bind:value={settings.maxTagSizePx}
+        />
+        <span class="val">{settings.maxTagSizePx} px</span>
+      </div>
+      <p class="hint">
+        Safety cutoff: stops forward advance if any marker exceeds this pixel height on camera.
+      </p>
 
       <h3>Cameras</h3>
       <div class="row">

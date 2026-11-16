@@ -45,37 +45,29 @@ export function boardToSim(boardXmm: number, boardYmm: number): [number, number]
 // would in the room — spot the side tag from across the floor, drive to it, then
 // look down at the board. Deliberately placed behind-right of the robot's start
 // pose so it is NOT in the camera's opening view; exploring is what reveals it.
-export const STATION_TAG_ID = 200;
+export const STATION_TAG_ID = 201;
+export const BOUNDARY_TAG_ID = 240; // Universal stop/end boundary tag (within 6x6_250 dictionary)
 export const STATION_H = 0.16; // pedestal height (m) — board sits on top
 export const STATION_HALF = 0.12; // pedestal half-width (m)
 export const STATION_TAG_HALF = 0.04; // 80 mm nav tag
 
 /**
- * The workable stations stand on a ring around the robot, evenly spaced.
+ * All workable stations are placed in a straight line along the rack/table
+ * in front of the robot's driving corridor (at X = 0.85m), with realistic
+ * non-equidistant spacing along the Y axis.
  *
- * Five points cannot all be the same distance from each other — only three can,
- * as an equilateral triangle. A regular pentagon is the nearest thing that reads
- * as even: every station the same distance from the robot, and every neighbour
- * the same distance apart, which is what makes the layout look deliberate.
- *
- * The first sits at −45°, outside the camera's opening view, so finding it still
- * takes a turn rather than being handed over on load.
+ * At the positive end of the line sits the unified Stop / End Tag (Tag 250).
  */
-const RING_R = 0.95;
-const RING_START = (-45 * Math.PI) / 180;
-const RING_N = 5;
-function ringPos(i: number): { x: number; y: number } {
-  const a = RING_START + (i * 2 * Math.PI) / RING_N;
-  return { x: RING_R * Math.cos(a), y: RING_R * Math.sin(a) };
-}
-/** Distance between neighbours on the ring (m) — the chord of one step. */
-export const RING_SPACING = 2 * RING_R * Math.sin(Math.PI / RING_N);
+export const LINE_X = 0.85;
 
 /** Tag id of the pickable object sitting on the station's board. */
 export const STATION_OBJECT_TAG = 101;
 
 /** What sits on a station's board. */
-export type PropKind = 'block' | 'apple' | 'orange' | 'banana' | 'bottle' | 'plant' | 'basket';
+export type PropKind = 'block' | 'apple' | 'orange' | 'banana' | 'bottle' | 'plant' | 'basket' | 'none';
+
+/** Specialized station archetypes */
+export type StationType = 'simple' | 'printer' | 'deposit' | 'modifier' | 'table';
 
 export interface StationDef {
   /** Nav fiducial on the pedestal's side, used to find and drive to it. */
@@ -87,50 +79,231 @@ export interface StationDef {
   prop: PropKind;
   /** Tag on the prop itself; 0 for props that carry none. */
   propTag: number;
-  /**
-   * Whether an opening sweep should find it. Default true.
-   *
-   * False turns the nav tag away from the start point, which is what actually
-   * hides a station — distance alone doesn't, since the sweep sees as far as the
-   * camera does. Used for the things that can't be picked yet, so they stay out
-   * of the way instead of offering themselves as targets that go nowhere.
-   */
   discoverable?: boolean;
+  isBoundary?: boolean;
+  /** Station archetype / operational mode */
+  stationType?: StationType;
+  /** Custom STL model filename (e.g. 'models/gear.stl' or 'bracket.stl') */
+  stlName?: string;
+  /** Current quantity of items available at this station (e.g. for deposit stations) */
+  itemCount?: number;
+  /** Maximum capacity / replenish target for deposit stations */
+  maxItemCount?: number;
+  /** Current operational state (e.g. for 3d printer or magic modifier) */
+  state?: 'idle' | 'printing' | 'ready' | 'processing';
+  /** Output STL for magic modification station */
+  outputStlName?: string;
+  /** Associated ACT model ID (optional per-station policy) */
+  actModelId?: string;
+  /** Associated Hugging Face dataset ID (optional) */
+  actDatasetId?: string;
 }
 
-/**
- * The stations, and what is on each.
- *
- * Spread around the robot's start point rather than clustered, so exploring has
- * something to do and each one is approached from a different heading. Every
- * pedestal is turned so its nav tag looks back at the origin — see stationYaw —
- * which is what makes a single opening sweep enough to find all of them.
- */
-export const STATIONS: StationDef[] = [
-  { navTag: 200, label: 'BLOCK', description: 'Wooden jenga block', ...ringPos(0), prop: 'block', propTag: 101 },
-  { navTag: 201, label: 'APPLE', description: 'Red fruit, pick it up', ...ringPos(1), prop: 'apple', propTag: 102 },
-  { navTag: 202, label: 'BANANA', description: 'Yellow curved fruit', ...ringPos(2), prop: 'banana', propTag: 103 },
-  // Where picked things go. No marker: it is a destination, not a target.
-  { navTag: 205, label: 'BASKET', description: 'Drop zone for picked items', ...ringPos(3), prop: 'basket', propTag: 0 },
-  { navTag: 206, label: 'ORANGE', description: 'Round citrus fruit', ...ringPos(4), prop: 'orange', propTag: 105 },
-  // Bottle and plant: the watering job, which nothing can do yet. Set out beyond
-  // the basket on the same line, with their nav tags turned away so an opening
-  // sweep doesn't offer them. They are there to be found deliberately, once the
-  // sideways-tag grasp exists — not to clutter the list with dead ends.
-  { navTag: 203, label: 'BOTTLE', description: 'Water bottle, side tag', x: -0.10, y: -1.95, prop: 'bottle', propTag: 104, discoverable: false },
-  { navTag: 204, label: 'PLANT', description: 'Potted plant, water me', x: -0.15, y: -2.75, prop: 'plant', propTag: 0, discoverable: false },
+export interface ActModelDef {
+  id: string;
+  name: string;
+  datasetId: string;
+  stationTag?: number;
+  description?: string;
+}
+
+export const DEFAULT_ACT_MODELS: ActModelDef[] = [
+  {
+    id: 'lerobot/act_so100_pick_block',
+    name: 'Block Precision Pick',
+    datasetId: 'lerobot/so100_jenga_pick',
+    stationTag: 201,
+    description: 'ACT policy trained to pick up wooden blocks from the pedestal',
+  },
+  {
+    id: 'lerobot/act_so100_sort_apple',
+    name: 'Apple Sorter',
+    datasetId: 'lerobot/so100_apple_sort',
+    stationTag: 202,
+    description: 'ACT policy for picking and inspecting the apple prop',
+  },
+  {
+    id: 'lerobot/act_so100_banana_grab',
+    name: 'Banana Transfer',
+    datasetId: 'lerobot/so100_banana_pick',
+    stationTag: 203,
+    description: 'ACT policy for grasping curved banana prop',
+  },
+  {
+    id: 'lerobot/act_so100_basket_drop',
+    name: 'Basket Deposit',
+    datasetId: 'lerobot/so100_basket_drop',
+    stationTag: 204,
+    description: 'ACT policy for safely depositing held objects into payload basket',
+  },
+];
+
+export type PathPlanAction =
+  | 'navigate'
+  | 'run_act'
+  | 'pick_tag'
+  | 'put_basket'
+  | 'open_gripper'
+  | 'close_gripper'
+  | 'wait';
+
+export interface PathPlanStep {
+  id: string;
+  action: PathPlanAction;
+  target?: number | string;
+  modelId?: string;
+  tagId?: number;
+  duration?: number;
+  description: string;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  error?: string;
+}
+
+export interface PathPlan {
+  id?: string;
+  name: string;
+  description?: string;
+  steps: PathPlanStep[];
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'aborted';
+  currentStepIndex: number;
+}
+
+export const DEFAULT_MISSIONS: PathPlan[] = [
+  {
+    id: 'mission-pick-store',
+    name: 'Multi-Station Pick & Store',
+    description: 'Navigate to Block #201, precision pick with ACT policy, drive to Basket #204 and deposit.',
+    status: 'idle',
+    currentStepIndex: 0,
+    steps: [
+      {
+        id: 'step-def-1',
+        action: 'navigate',
+        target: 'BLOCK',
+        description: 'Drive to Block station (#201)',
+        status: 'pending',
+      },
+      {
+        id: 'step-def-2',
+        action: 'run_act',
+        modelId: 'lerobot/act_so100_pick_block',
+        description: 'Run ACT Model: Block Precision Pick',
+        status: 'pending',
+      },
+      {
+        id: 'step-def-3',
+        action: 'navigate',
+        target: 'BASKET',
+        description: 'Drive to Basket zone (#204)',
+        status: 'pending',
+      },
+      {
+        id: 'step-def-4',
+        action: 'run_act',
+        modelId: 'lerobot/act_so100_basket_drop',
+        description: 'Run ACT Model: Basket Deposit',
+        status: 'pending',
+      },
+    ],
+  },
+  {
+    id: 'mission-fruit-sort',
+    name: 'Fruit Sorting Routine',
+    description: 'Drive to Apple station (#202), sort apple prop using ACT, and proceed to Banana (#203).',
+    status: 'idle',
+    currentStepIndex: 0,
+    steps: [
+      {
+        id: 'step-fruit-1',
+        action: 'navigate',
+        target: 'APPLE',
+        description: 'Drive to Apple station (#202)',
+        status: 'pending',
+      },
+      {
+        id: 'step-fruit-2',
+        action: 'run_act',
+        modelId: 'lerobot/act_so100_sort_apple',
+        description: 'Run ACT Model: Apple Sorter',
+        status: 'pending',
+      },
+      {
+        id: 'step-fruit-3',
+        action: 'navigate',
+        target: 'BANANA',
+        description: 'Drive to Banana station (#203)',
+        status: 'pending',
+      },
+      {
+        id: 'step-fruit-4',
+        action: 'run_act',
+        modelId: 'lerobot/act_so100_banana_grab',
+        description: 'Run ACT Model: Banana Transfer',
+        status: 'pending',
+      },
+    ],
+  },
+  {
+    id: 'mission-corridor-patrol',
+    name: 'Full Corridor Patrol',
+    description: 'Sweep along the track from START boundary to STOP boundary, inspecting all tags.',
+    status: 'idle',
+    currentStepIndex: 0,
+    steps: [
+      {
+        id: 'step-patrol-1',
+        action: 'navigate',
+        target: 'START',
+        description: 'Drive to Start post boundary',
+        status: 'pending',
+      },
+      {
+        id: 'step-patrol-2',
+        action: 'wait',
+        duration: 1.5,
+        description: 'Scan fiducial anchor tags',
+        status: 'pending',
+      },
+      {
+        id: 'step-patrol-3',
+        action: 'navigate',
+        target: 'STOP',
+        description: 'Drive to Stop post boundary',
+        status: 'pending',
+      },
+    ],
+  },
 ];
 
 /**
- * The yaw that turns a station's tagged face back toward the origin.
- *
- * Derived rather than stored: a tag facing the wrong way is invisible from the
- * start point no matter how long the robot spins, and that is not the kind of
- * mistake worth leaving to a hand-entered angle per station.
+ * The stations along the straight line, ordered from left (-Y) to right (+Y).
+ * Every station features a unique left nav tag (201..499) paired with a universal
+ * right anchor tag (200), except the boundary stop tag (250).
  */
-export function stationYaw(s: { x: number; y: number; discoverable?: boolean }): number {
-  const toOrigin = Math.atan2(-s.y, -s.x);
-  return s.discoverable === false ? toOrigin + Math.PI : toOrigin;
+export const DEFAULT_STATIONS: StationDef[] = [
+  // Start Boundary Tag Post (Left End, single tag without anchor 200)
+  { navTag: BOUNDARY_TAG_ID, label: 'START', description: 'Start of station rack', x: LINE_X, y: -1.05, prop: 'plant', propTag: 0, isBoundary: true, stationType: 'simple' },
+  { navTag: 201, label: 'BLOCK', description: 'Wooden jenga block', x: LINE_X, y: -0.75, prop: 'block', propTag: 101, stationType: 'simple', actModelId: 'lerobot/act_so100_pick_block', actDatasetId: 'lerobot/so100_jenga_pick' },
+  { navTag: 202, label: 'APPLE', description: 'Red fruit, pick it up', x: LINE_X, y: -0.40, prop: 'apple', propTag: 102, stationType: 'simple', actModelId: 'lerobot/act_so100_sort_apple', actDatasetId: 'lerobot/so100_apple_sort' },
+  { navTag: 203, label: 'BANANA', description: 'Yellow curved fruit', x: LINE_X, y: -0.05, prop: 'banana', propTag: 103, stationType: 'simple', actModelId: 'lerobot/act_so100_banana_grab', actDatasetId: 'lerobot/so100_banana_pick' },
+  // Where picked things go. No marker: it is a destination, not a target.
+  { navTag: 204, label: 'BASKET', description: 'Drop zone for picked items', x: LINE_X, y: 0.30, prop: 'basket', propTag: 0, stationType: 'simple', actModelId: 'lerobot/act_so100_basket_drop', actDatasetId: 'lerobot/so100_basket_drop' },
+  { navTag: 205, label: 'ORANGE', description: 'Round citrus fruit', x: LINE_X, y: 0.65, prop: 'orange', propTag: 105, stationType: 'simple' },
+  // End Boundary Tag Post (Right End, single tag without anchor 200)
+  { navTag: BOUNDARY_TAG_ID, label: 'STOP', description: 'End of station rack', x: LINE_X, y: 0.95, prop: 'plant', propTag: 0, isBoundary: true, stationType: 'simple' },
+];
+
+export let STATIONS: StationDef[] = [...DEFAULT_STATIONS];
+
+export function setCustomStations(stations: StationDef[]) {
+  STATIONS = [...stations];
+}
+
+/**
+ * The yaw that turns a station's tagged face back toward the robot corridor (along -X).
+ */
+export function stationYaw(_s?: { x?: number; y?: number; discoverable?: boolean }): number {
+  return Math.PI;
 }
 
 /**
@@ -298,43 +471,235 @@ function fruitGeoms(s: StationDef, physics: boolean): string[] {
   return g;
 }
 
+function printedItemGeoms(s: StationDef, physics: boolean, relZ: number, availableMeshes?: any): string[] {
+  const g: string[] = [];
+  const solid = physics
+    ? 'contype="3" conaffinity="3" friction="1.4 0.02 0.001" mass="0.04"'
+    : 'contype="0" conaffinity="0" group="1"';
+  const stl = s.outputStlName || s.stlName;
+  if (stl && isMeshFileAvailable(stl, availableMeshes)) {
+    const meshName = `mesh_st_${s.navTag}`;
+    g.push(
+      `<geom name="station_custom_stl_${s.navTag}" type="mesh" mesh="${meshName}" ` +
+        `pos="0 0 ${f(relZ)}" rgba="0.25 0.72 0.95 1" ${solid}/>`,
+    );
+  } else {
+    g.push(
+      `<geom name="printer_${s.navTag}_printed_item" type="box" pos="0 0 ${f(relZ + 0.008)}" ` +
+        `size="0.025 0.025 0.008" rgba="0.10 0.80 0.90 1" ${solid}/>`,
+    );
+  }
+  return g;
+}
+
 /** Every free-body prop, as world-frame bodies. */
-function freePropBodies(physics: boolean): string {
+function freePropBodies(physics: boolean, availableMeshes?: any): string {
   const out: string[] = [];
   for (const s of STATIONS) {
-    if (!FREE_PROPS.includes(s.prop)) continue;
-    const [x, y, z] = stationPropWorld(s);
-    const yaw = stationYaw(s);
-    out.push(
-      `<body name="prop_${s.navTag}" pos="${f(x)} ${f(y)} ${f(z)}" euler="0 0 ${f(yaw)}">` +
-        (physics ? `<freejoint name="prop_${s.navTag}_free"/>` : '') +
-        fruitGeoms(s, physics).join('') +
-        `</body>`,
-    );
+    if (FREE_PROPS.includes(s.prop)) {
+      const [x, y, z] = stationPropWorld(s);
+      const yaw = stationYaw(s);
+      out.push(
+        `<body name="prop_${s.navTag}" pos="${f(x)} ${f(y)} ${f(z)}" euler="0 0 ${f(yaw)}">` +
+          (physics ? `<freejoint name="prop_${s.navTag}_free"/>` : '') +
+          fruitGeoms(s, physics).join('') +
+          `</body>`,
+      );
+    } else if (s.stationType === 'printer' && (s.state === 'ready' || !s.state)) {
+      const top = STATION_H + 0.0015;
+      const pz = top + 0.008;
+      out.push(
+        `<body name="prop_${s.navTag}" pos="${f(s.x)} ${f(s.y)} ${f(pz)}">` +
+          (physics ? `<freejoint name="prop_${s.navTag}_free"/>` : '') +
+          printedItemGeoms(s, physics, 0, availableMeshes).join('') +
+          `</body>`,
+      );
+    }
   }
   return out.join('\n    ');
 }
 
+export interface BuildSceneOptions {
+  physics?: boolean;
+  centreBoard?: boolean;
+  availableMeshes?: string[] | Set<string> | Record<string, any>;
+}
+
+export function isMeshFileAvailable(
+  fileName: string | undefined,
+  available?: string[] | Set<string> | Record<string, any>,
+): boolean {
+  if (!fileName) return false;
+  if (!available) return false;
+  const cleanName = fileName.replace(/^models\//, '');
+  if (Array.isArray(available)) {
+    return available.some((a) => a === fileName || a === cleanName || a.replace(/^models\//, '') === cleanName);
+  }
+  if (available instanceof Set) {
+    return available.has(fileName) || available.has(cleanName) || available.has(`models/${cleanName}`);
+  }
+  return !!(available[fileName] || available[cleanName] || available[`models/${cleanName}`]);
+}
+
+function customMeshGeoms(s: StationDef, physics: boolean, top: number, availableMeshes?: any, includeTag = true): string[] {
+  const g: string[] = [];
+  const solid = physics ? 'contype="3" conaffinity="3"' : 'contype="0" conaffinity="0" group="1"';
+  const stl = s.outputStlName || s.stlName;
+  if (stl && isMeshFileAvailable(stl, availableMeshes)) {
+    const meshName = `mesh_st_${s.navTag}`;
+    g.push(
+      `<geom name="station_custom_stl_${s.navTag}" type="mesh" mesh="${meshName}" ` +
+        `pos="0 0 ${f(top + 0.005)}" rgba="0.25 0.72 0.95 1" ${solid}/>`,
+    );
+  } else {
+    // Clean procedural 3D item if custom mesh is not yet uploaded
+    g.push(
+      `<geom name="station_fallback_item_${s.navTag}" type="box" pos="0 0 ${f(top + 0.016)}" ` +
+        `size="0.025 0.025 0.008" rgba="0.10 0.80 0.90 1" ${solid}/>`,
+    );
+  }
+  if (s.propTag && includeTag) {
+    g.push(...padTagGeoms(`ptag_${s.propTag}`, top + 0.024, 0.012));
+  }
+  return g;
+}
+
 /**
- * The props, built from MuJoCo primitives rather than imported meshes.
- *
- * A sphere is an apple as far as this simulation is concerned: what the pick
- * needs from an object is a place to put the jaws and a tag to aim at, and a
- * primitive gives exact collision geometry for a few bytes where a downloaded
- * mesh gives approximate collision for megabytes. It also keeps the scene free of
- * third-party assets and the licence tracking that comes with them.
+ * The props and specialized machinery, built from MuJoCo primitives & custom meshes.
  */
-function propGeoms(s: StationDef, physics: boolean): string[] {
+function propGeoms(s: StationDef, physics: boolean, availableMeshes?: any): string[] {
   const g: string[] = [];
   const solid = physics ? 'contype="3" conaffinity="3"' : 'contype="0" conaffinity="0" group="1"';
   const decor = 'contype="0" conaffinity="0" group="1"';
   const n = s.navTag;
   const top = STATION_H + 0.0015;
+  const stType = s.stationType || 'simple';
+
+  // If station has a custom STL specified
+  if (s.stlName && stType === 'simple') {
+    return customMeshGeoms(s, physics, top, availableMeshes);
+  }
+
+  // 1. 3D Printer Station: Pretend 3D printer with frame, bed, gantry, extruder, nozzle, and LED
+  if (stType === 'printer') {
+    const fw = 0.065, fh = 0.090, pw = 0.005;
+    // 4 vertical frame pillars
+    for (const [px, py] of [[-fw, -fw], [fw, -fw], [-fw, fw], [fw, fw]]) {
+      g.push(
+        `<geom name="printer_${n}_post_${px > 0 ? 'p' : 'n'}${py > 0 ? 'p' : 'n'}" type="box" ` +
+          `pos="${f(px)} ${f(py)} ${f(top + fh / 2)}" size="${f(pw)} ${f(pw)} ${f(fh / 2)}" ` +
+          `rgba="0.20 0.22 0.26 1" ${decor}/>`,
+      );
+    }
+    // Top crossbars
+    g.push(
+      `<geom name="printer_${n}_top_x1" type="box" pos="0 ${f(-fw)} ${f(top + fh)}" size="${f(fw)} ${f(pw)} ${f(pw)}" rgba="0.20 0.22 0.26 1" ${decor}/>`,
+      `<geom name="printer_${n}_top_x2" type="box" pos="0 ${f(fw)} ${f(top + fh)}" size="${f(fw)} ${f(pw)} ${f(pw)}" rgba="0.20 0.22 0.26 1" ${decor}/>`,
+      `<geom name="printer_${n}_top_y1" type="box" pos="${f(-fw)} 0 ${f(top + fh)}" size="${f(pw)} ${f(fw)} ${f(pw)}" rgba="0.20 0.22 0.26 1" ${decor}/>`,
+      `<geom name="printer_${n}_top_y2" type="box" pos="${f(fw)} 0 ${f(top + fh)}" size="${f(pw)} ${f(fw)} ${f(pw)}" rgba="0.20 0.22 0.26 1" ${decor}/>`,
+    );
+    // Heated print bed
+    g.push(
+      `<geom name="printer_${n}_bed" type="box" pos="0 0 ${f(top + 0.004)}" ` +
+        `size="0.055 0.055 0.004" rgba="0.12 0.13 0.15 1" ${solid}/>`,
+    );
+    // Gantry beam + extruder carriage + nozzle
+    const gz = s.state === 'printing' ? top + 0.035 : top + 0.075;
+    g.push(
+      `<geom name="printer_${n}_gantry" type="box" pos="0 0 ${f(gz)}" ` +
+        `size="0.004 ${f(fw)} 0.005" rgba="0.45 0.48 0.52 1" ${decor}/>`,
+      `<geom name="printer_${n}_extruder" type="box" pos="0 0 ${f(gz - 0.002)}" ` +
+        `size="0.014 0.014 0.012" rgba="0.85 0.22 0.22 1" ${decor}/>`,
+      `<geom name="printer_${n}_nozzle" type="cylinder" pos="0 0 ${f(gz - 0.014)}" ` +
+        `size="0.003 0.004" rgba="0.95 0.75 0.15 1" ${decor}/>`,
+    );
+    // Status LCD / LED screen
+    const screenColor = s.state === 'printing' ? '1 0.65 0.10 1' : '0.10 0.85 0.95 1';
+    g.push(
+      `<geom name="printer_${n}_screen" type="box" pos="${f(fw + 0.002)} 0 ${f(top + 0.030)}" ` +
+        `size="0.002 0.018 0.012" rgba="${screenColor}" ${decor}/>`,
+    );
+
+    return g;
+  }
+
+  // 2. Deposit / Dispenser Station: Multi-item storage hopper
+  if (stType === 'deposit') {
+    const trayH = 0.012;
+    // Sloped dispenser tray with metallic side rails
+    g.push(
+      `<geom name="deposit_${n}_tray" type="box" pos="0 0 ${f(top + trayH / 2)}" ` +
+        `size="0.075 0.075 ${f(trayH / 2)}" rgba="0.30 0.35 0.42 1" ${solid}/>`,
+      `<geom name="deposit_${n}_rail_l" type="box" pos="0 -0.072 ${f(top + trayH + 0.012)}" ` +
+        `size="0.075 0.003 0.012" rgba="0.60 0.65 0.70 1" ${decor}/>`,
+      `<geom name="deposit_${n}_rail_r" type="box" pos="0 0.072 ${f(top + trayH + 0.012)}" ` +
+        `size="0.075 0.003 0.012" rgba="0.60 0.65 0.70 1" ${decor}/>`,
+      `<geom name="deposit_${n}_stop" type="box" pos="0.072 0 ${f(top + trayH + 0.008)}" ` +
+        `size="0.003 0.075 0.008" rgba="0.95 0.65 0.15 1" ${decor}/>`,
+    );
+    // Dispenser items (renders s.itemCount items, max 5)
+    const count = Math.min(5, Math.max(0, s.itemCount ?? 3));
+    for (let i = 0; i < count; i++) {
+      const iy = (i - (count - 1) / 2) * 0.030;
+      g.push(
+        `<geom name="deposit_${n}_item_${i}" type="box" pos="0 ${f(iy)} ${f(top + trayH + 0.010)}" ` +
+          `size="0.022 0.012 0.010" rgba="0.25 0.75 0.45 1" ${solid}/>`,
+      );
+    }
+    if (count > 0 && s.propTag) {
+      g.push(...padTagGeoms(`ptag_${s.propTag}`, top + trayH + 0.020, 0.010));
+    }
+    return g;
+  }
+
+  // 3. Magic Modification Station: Transmutation / transformation chamber
+  if (stType === 'modifier') {
+    const chR = 0.065, chH = 0.085;
+    // Base scanner ring
+    g.push(
+      `<geom name="modifier_${n}_ring_b" type="cylinder" pos="0 0 ${f(top + 0.006)}" ` +
+        `size="${f(chR + 0.006)} 0.006" rgba="0.22 0.25 0.30 1" ${solid}/>`,
+    );
+    // Glowing containment dome (translucent radiant purple)
+    g.push(
+      `<geom name="modifier_${n}_dome" type="cylinder" pos="0 0 ${f(top + chH / 2)}" ` +
+        `size="${f(chR)} ${f(chH / 2)}" rgba="0.65 0.25 0.95 0.35" ${decor}/>`,
+    );
+    // Top magnetic emitter ring + glowing core
+    g.push(
+      `<geom name="modifier_${n}_ring_t" type="cylinder" pos="0 0 ${f(top + chH)}" ` +
+        `size="${f(chR + 0.006)} 0.005" rgba="0.22 0.25 0.30 1" ${decor}/>`,
+      `<geom name="modifier_${n}_core" type="sphere" pos="0 0 ${f(top + chH + 0.012)}" ` +
+        `size="0.014" rgba="0.95 0.20 0.85 0.95" ${decor}/>`,
+    );
+    // Transformed output item inside chamber
+    if ((s.outputStlName || s.stlName) && isMeshFileAvailable(s.outputStlName || s.stlName, availableMeshes)) {
+      g.push(...customMeshGeoms(s, physics, top + 0.010, availableMeshes));
+    } else {
+      g.push(
+        `<geom name="modifier_${n}_transmuted" type="box" pos="0 0 ${f(top + 0.015)}" ` +
+          `size="0.024 0.024 0.015" rgba="0.85 0.35 0.95 1" ${solid}/>`,
+      );
+      if (s.propTag) {
+        g.push(...padTagGeoms(`ptag_${s.propTag}`, top + 0.030, 0.012));
+      }
+    }
+    return g;
+  }
+
+  // 4. Table Station: Spacious drop workbench / assembly surface
+  if (stType === 'table') {
+    // Wide hardwood/metallic worktable top (no pre-placed objects)
+    g.push(
+      `<geom name="table_${n}_top" type="box" pos="0 0 ${f(top + 0.006)}" ` +
+        `size="0.115 0.115 0.006" rgba="0.75 0.58 0.40 1" ${solid}/>`,
+    );
+    return g;
+  }
+
+  // 5. Standard props
   switch (s.prop) {
     case 'bottle': {
-      // Upright cylinder. Its tag is on the *side*, standing vertical — the whole
-      // point of this one, and why it is not yet pickable: every grasp so far has
-      // come down onto a tag lying flat, and this one faces sideways.
       const r = 0.035, h = 0.11;
       g.push(
         `<geom name="bottle_${n}" type="cylinder" pos="0 0 ${f(top + h / 2)}" ` +
@@ -344,7 +709,6 @@ function propGeoms(s: StationDef, physics: boolean): string[] {
         `<geom name="bottle_neck_${n}" type="cylinder" pos="0 0 ${f(top + h + 0.001)}" ` +
           `size="0.016 0.010" rgba="0.30 0.55 0.85 0.85" ${decor}/>`,
       );
-      // Marker wrapped on the curved face, turned to look back at the robot.
       const tz = top + h * 0.55;
       g.push(
         `<geom name="ptag_${s.propTag}_face" type="box" pos="${f(r + 0.0005)} 0 ${f(tz)}" ` +
@@ -356,33 +720,7 @@ function propGeoms(s: StationDef, physics: boolean): string[] {
       );
       break;
     }
-    case 'plant': {
-      // A potted plant: the thing to be watered, so it carries no pick tag.
-      const pr = 0.045, ph = 0.055;
-      g.push(
-        `<geom name="pot_${n}" type="cylinder" pos="0 0 ${f(top + ph / 2)}" ` +
-          `size="${f(pr)} ${f(ph / 2)}" rgba="0.62 0.33 0.22 1" ${solid}/>`,
-        `<geom name="soil_${n}" type="cylinder" pos="0 0 ${f(top + ph - 0.004)}" ` +
-          `size="${f(pr * 0.86)} 0.006" rgba="0.22 0.16 0.11 1" ${decor}/>`,
-      );
-      const base = top + ph;
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2;
-        const lx = Math.cos(a) * 0.045, ly = Math.sin(a) * 0.045;
-        g.push(
-          `<geom name="stem_${n}_${i}" type="capsule" ` +
-            `fromto="0 0 ${f(base)} ${f(lx * 0.5)} ${f(ly * 0.5)} ${f(base + 0.07)}" ` +
-            `size="0.004" rgba="0.18 0.45 0.16 1" ${decor}/>`,
-          `<geom name="leaf_${n}_${i}" type="ellipsoid" ` +
-            `pos="${f(lx * 0.7)} ${f(ly * 0.7)} ${f(base + 0.085)}" ` +
-            `size="0.030 0.018 0.006" euler="0 0.35 ${f(a)}" ` +
-            `rgba="0.20 0.55 0.18 1" ${decor}/>`,
-        );
-      }
-      break;
-    }
     case 'basket': {
-      // An open box to drop things into: floor plus four low walls.
       const hw = 0.085, wall = 0.006, h = 0.055;
       const wallGeom = (tag: string, px: number, py: number, sx: number, sy: number) =>
         `<geom name="basket_${n}_${tag}" type="box" ` +
@@ -402,33 +740,55 @@ function propGeoms(s: StationDef, physics: boolean): string[] {
     case 'orange':
     case 'banana':
     case 'block':
-      break; // free bodies, injected separately
+    case 'none':
+      break;
   }
   return g;
 }
 
 /** Every pedestal, its board top, its side nav tag, and whatever stands on it. */
-function stationGeoms(physics: boolean): string[] {
+function stationGeoms(physics: boolean, availableMeshes?: any): string[] {
   const g: string[] = [];
   const boardHalf = SQUARE_MM / 2 / 1000;
   const tagHalf = TAG_MM / 2 / 1000;
   for (const s of STATIONS) {
     const n = s.navTag;
-    // Radians, not degrees: the model sets <compiler angle="radian">, so a value
-    // in degrees is read as that many radians. 163° became 163 rad ≡ 350°, which
-    // spun the pedestal round and pointed its nav tag away from the robot — the
-    // tags were never detected because the marker was on the far side.
     const yaw = stationYaw(s);
+    if (s.isBoundary) {
+      // Modular stop stand with warm brown base plate and sleek dark blue upright structure
+      const uniqueSuffix = s.y < 0 ? 'start' : 'end';
+      const tagZ = 0.070; // Aligned at top of upright face (56mm tag height, 95mm face + 6mm base, top at Z = 101mm)
+      g.push(`<body name="boundary_post_${uniqueSuffix}" pos="${f(s.x)} ${f(s.y)} 0" euler="0 0 ${f(yaw)}">`);
+      // 1. Base Plate in Warm Earthy Walnut Brown
+      g.push(
+        `<geom name="boundary_base_${uniqueSuffix}" type="mesh" mesh="boundary_base_plate" ` +
+          `rgba="0.48 0.28 0.16 1" ` +
+          (physics ? 'contype="3" conaffinity="3"' : 'contype="0" conaffinity="0" group="1"') +
+          `/>`,
+      );
+      // 2. Upright Face Plate and Gusset Brackets in Sleek Dark Blue
+      g.push(
+        `<geom name="boundary_upright_${uniqueSuffix}" type="mesh" mesh="boundary_stand_upright" ` +
+          `rgba="0.18 0.24 0.36 1" ` +
+          (physics ? 'contype="3" conaffinity="3"' : 'contype="0" conaffinity="0" group="1"') +
+          `/>`,
+      );
+      // 3. Rounded Stop Stand Tag Plate (46mm wide x 56mm high) with bold red borders & exploration text
+      g.push(
+        `<geom name="boundary_navtag_${uniqueSuffix}" type="box" ` +
+          `pos="0.0186 0 ${f(tagZ)}" ` +
+          `size="0.0005 0.023 0.028" ` +
+          `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
+      );
+      g.push('</body>');
+      continue;
+    }
     // A body lets everything below be written in the station's own frame.
     g.push(`<body name="station_${n}" pos="${f(s.x)} ${f(s.y)} 0" euler="0 0 ${f(yaw)}">`);
     g.push(
       `<geom name="station_pedestal_${n}" type="box" pos="0 0 ${f(STATION_H / 2)}" ` +
         `size="${f(STATION_HALF)} ${f(STATION_HALF)} ${f(STATION_H / 2)}" ` +
         `rgba="0.35 0.36 0.40 1" ` +
-        // Channel 3 in physics mode, so it collides with both the props (which
-        // rest on it) and the arm (1 & 3 is non-zero). The body has no joint, so
-        // it is immovable: the arm stops against it rather than pushing it or
-        // passing through, which is what a real pedestal does.
         (physics ? 'contype="3" conaffinity="3"' : 'contype="0" conaffinity="0" group="1"') +
         `/>`,
     );
@@ -438,8 +798,7 @@ function stationGeoms(physics: boolean): string[] {
         `size="${f(boardHalf)} ${f(boardHalf)} 0.0005" rgba="0.85 0.80 0.65 1" ` +
         `contype="0" conaffinity="0" group="1"/>`,
     );
-    // The calibration border only goes on the first station: the tag ids are
-    // fixed, and repeating them would put the same marker in several places.
+    // The calibration border only goes on the first station
     if (n === STATION_TAG_ID) {
       for (const [id, [bx, by]] of boardTagCentres(SQUARE_MM, TAG_MM, GAP_MM, N_OUTER, N_INNER)) {
         const lx = (bx - SQUARE_MM / 2) / 1000;
@@ -451,7 +810,7 @@ function stationGeoms(physics: boolean): string[] {
         );
       }
     }
-    // The dual nav tag card on the +X side, which stationYaw has turned toward the origin.
+    // The dual nav tag card on the +X side
     const tz = STATION_H - 0.045;
     // White sheet backing plate for the entire card (160mm wide x 60mm high)
     g.push(
@@ -460,28 +819,28 @@ function stationGeoms(physics: boolean): string[] {
         `size="0.0005 0.080 0.030" ` +
         `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
-    // Left marker (Tag 200) - size 40mm x 40mm (half 0.020), on -Y side (viewer left)
+    // Left marker (Tag 200) - on -Y side (viewer left)
     g.push(
       `<geom name="station_navtag_${n}" type="box" ` +
         `pos="${f(STATION_HALF + 0.0015)} -0.055 ${f(tz)}" ` +
         `size="0.0005 0.020 0.020" ` +
         `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
-    // Right marker (Tag 201) - size 40mm x 40mm (half 0.020), on +Y side (viewer right)
+    // Right marker (Tag 201) - on +Y side (viewer right)
     g.push(
       `<geom name="station_navtag_right_${n}" type="box" ` +
         `pos="${f(STATION_HALF + 0.0015)} 0.055 ${f(tz)}" ` +
         `size="0.0005 0.020 0.020" ` +
         `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
-    // Middle text plate carrying the station's label (top) and description (bottom)
+    // Middle text plate carrying the station's label
     g.push(
       `<geom name="station_label_${n}" type="box" ` +
         `pos="${f(STATION_HALF + 0.0015)} 0 ${f(tz)}" ` +
         `size="0.0005 0.030 0.020" ` +
         `rgba="1 1 1 1" contype="0" conaffinity="0" group="1"/>`,
     );
-    g.push(...propGeoms(s, physics));
+    g.push(...propGeoms(s, physics, availableMeshes));
     g.push('</body>');
   }
   return g;
@@ -494,7 +853,7 @@ function stationGeoms(physics: boolean): string[] {
  */
 export function buildBoardSceneXml(
   baseXml: string,
-  opts: { physics?: boolean; centreBoard?: boolean } = {},
+  opts: BuildSceneOptions = {},
 ): string {
   const tagHalf = TAG_MM / 2 / 1000;
   const boardHalf = SQUARE_MM / 2 / 1000;
@@ -572,7 +931,7 @@ export function buildBoardSceneXml(
       `rgba="0.12 0.13 0.15 1" group="3"/>`
     : '';
 
-  const station = stationGeoms(!!opts.physics).join('\n    ');
+  const station = stationGeoms(!!opts.physics, opts.availableMeshes).join('\n    ');
 
   // The real wrist-cam bracket (SO-ARM100 Optional/Wrist_Cam_Mount_32x32_UVC_Module,
   // with the fused gripper jaw trimmed off so it doesn't draw a second jaw over the
@@ -583,14 +942,28 @@ export function buildBoardSceneXml(
     `rgba="0.55 0.57 0.62 1" contype="0" conaffinity="0" group="1"/></body>`;
   const injection =
     `\n    ${geoms.join('\n    ')}\n    ${station}\n    ${mount}\n    ` +
-    `${floor}\n    ${block}\n    ${freePropBodies(!!opts.physics)}\n  </worldbody>`;
+    `${floor}\n    ${block}\n    ${freePropBodies(!!opts.physics, opts.availableMeshes)}\n  </worldbody>`;
   const idx = baseXml.lastIndexOf('</worldbody>');
   if (idx < 0) throw new Error('No </worldbody> in base model XML');
   let out = baseXml.slice(0, idx) + injection + baseXml.slice(idx + '</worldbody>'.length);
 
   // STL is in millimetres, like the arm's own meshes.
+  let customMeshes = '';
+  for (const s of STATIONS) {
+    const stl = s.outputStlName || s.stlName;
+    if (stl && isMeshFileAvailable(stl, opts.availableMeshes)) {
+      const cleanName = stl.replace(/^assets\//, '').replace(/^models\//, '');
+      customMeshes += `    <mesh name="mesh_st_${s.navTag}" file="${cleanName}" scale="0.001 0.001 0.001"/>\n`;
+    }
+  }
+
   const meshDecl =
-    '<mesh name="wrist_cam_mount" file="wrist_cam_mount.stl" scale="0.001 0.001 0.001"/>\n  </asset>';
+    '<mesh name="wrist_cam_mount" file="wrist_cam_mount.stl" scale="0.001 0.001 0.001"/>\n' +
+    '    <mesh name="boundary_base_plate" file="boundary_base_plate.stl" scale="0.001 0.001 0.001"/>\n' +
+    '    <mesh name="boundary_stand_upright" file="boundary_stand_upright.stl" scale="0.001 0.001 0.001"/>\n' +
+    '    <mesh name="boundary_stop_stand" file="boundary_stop_stand.stl" scale="0.001 0.001 0.001"/>\n' +
+    customMeshes +
+    '  </asset>';
   const aidx = out.lastIndexOf('</asset>');
   if (aidx < 0) throw new Error('No </asset> in base model XML');
   out = out.slice(0, aidx) + meshDecl + out.slice(aidx + '</asset>'.length);

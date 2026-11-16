@@ -17,12 +17,18 @@ Use the tool below to generate, customize, and print your tags directly from you
 
 ## Tag Categories & Placement Rules
 
-### 1. Navigation Station Cards (Tags 200 & 201)
-- **Pair Structure**: Contains Marker 200 on the left and Marker 201 on the right, with a clear human-readable title and AI context description between them.
-- **Placement**: Stick onto the vertical front face of docking stations, tables, or storage shelves at approximately **5–10 cm above floor level** so the base camera has a direct line of sight.
-- **Why Two Markers?**: The dual-marker pair provides exact scale, distance, and heading angle to square the robot directly in front of the target.
+### 1. Stop Stand Tags (Standardized Tag 240)
+- **Standalone Marker**: Uses a single standalone ArUco marker (`Tag #240`). It does **not** need a companion anchor `#200` tag.
+- **Placement**: Place one stop stand at the **left start** and one at the **right end** of the linear station rack with the tag aligned at the top.
+- **Function**: During linear strafe exploration sweeps, the robot uses these stop stand tags to know when it has reached the physical limits of the rack and should stop and reverse.
 
-### 2. Moveable Object / Prop Tags (Tags 1 – 199)
+### 2. Navigation Station Cards (Unique Left ID + Anchor Tag 200)
+- **Pair Structure**: Contains a **unique ArUco ID on the left** (e.g. 201, 202, 203, 204, 205...) and the universal **anchor ID 200 on the right**, with a human-readable title and AI context description between them.
+- **Unique Identification**: Every workable station has its own unique left tag ID, allowing the robot to index each station on the rack.
+- **Placement**: Stick onto the vertical front face of docking stations, tables, or storage shelves at approximately **5–10 cm above floor level** so the base camera has a direct line of sight.
+- **Why Two Markers?**: The dual-marker pair provides exact scale, distance, heading angle, and bounding geometry for perspective rectification and OCR text extraction.
+
+### 3. Moveable Object / Prop Tags (Tags 1 – 199)
 - **Placement**: Attach directly to the top or side of objects to pick up (apples, blocks, tools, cups).
 - **Orientation**: Align the top arrow pointing towards the front/top of the object. When the arm camera observes the tag, the analytical IK solver automatically aligns the gripper jaws to grasp along the approach axis.
 

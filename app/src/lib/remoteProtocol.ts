@@ -124,6 +124,8 @@ export type SignalMessage =
   | { type: 'offer'; sdp: string }
   | { type: 'answer'; sdp: string }
   | { type: 'ice'; candidate: unknown }
+  | { type: 'ping' }
+  | { type: 'pong' }
   | { type: 'peer-joined'; role: Role }
   | { type: 'peer-left'; role: Role }
   | { type: 'ready'; role: Role; peerPresent: boolean }

@@ -24,7 +24,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-from v4l2py.device import Device, VideoCapture
+from linuxpy.video.device import Device, VideoCapture, PixelFormat
 
 log = logging.getLogger("lekiwi_bridge.camera")
 
@@ -55,7 +55,10 @@ class Camera:
         dev = Device(self.path)
         dev.open()
         cap = VideoCapture(dev)
-        cap.set_format(self._width, self._height, "MJPG")
+        try:
+            cap.set_format(self._width, self._height, PixelFormat.MJPEG)
+        except Exception as e:
+            log.warning("camera %s: could not set format (%s), using driver default", self.path, e)
         try:
             cap.set_fps(self._fps)
         except Exception as e:
@@ -81,13 +84,8 @@ class Camera:
                 pass
             self._device = None
 
-    async def frames(self, cycle_interval_s: float = 15.0) -> AsyncIterator[bytes]:
-        """Yields raw JPEG bytes, one per captured frame, until cancelled.
-
-        Periodically recycles (closes and re-opens) the V4L2 device every
-        cycle_interval_s seconds (default 15s) and guards against driver stalls,
-        ensuring smooth continuous streaming without USB lockups.
-        """
+    async def frames(self) -> AsyncIterator[bytes]:
+        """Yields raw JPEG bytes, one per captured frame, until cancelled."""
         loop = asyncio.get_running_loop()
         target_interval = 1.0 / max(1, self._fps)
 
@@ -105,14 +103,13 @@ class Camera:
                     return iter(cap)
 
                 it = await loop.run_in_executor(None, _enter)
-                cycle_start = loop.time()
 
                 try:
-                    while loop.time() - cycle_start < cycle_interval_s:
+                    while True:
                         t0 = loop.time()
                         frame = await asyncio.wait_for(
                             loop.run_in_executor(None, next, it, None),
-                            timeout=2.5,
+                            timeout=5.0,
                         )
                         if frame is None:
                             break
@@ -122,7 +119,7 @@ class Camera:
                         if to_sleep > 0.002:
                             await asyncio.sleep(to_sleep)
                 except asyncio.TimeoutError:
-                    log.warning("camera %d: capture stalled (no frame in 2.5s), recycling device", self.index)
+                    log.warning("camera %d: capture stalled (no frame in 5s), recovering device", self.index)
                 finally:
                     try:
                         await loop.run_in_executor(None, cap.__exit__, None, None, None)
@@ -130,8 +127,7 @@ class Camera:
                         log.debug("camera %d: stream teardown error (%s)", self.index, e)
                     self.close()
 
-                # Brief pause before next cycle
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
                 if cap is not None:

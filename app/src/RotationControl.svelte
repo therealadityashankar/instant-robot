@@ -1,13 +1,21 @@
 <script lang="ts">
-  // Left/right rotation panel — ported from roboter/src/components/RotationControl.tsx.
-  // A split circle: hold ⟲ / ⟳ (or Q / E) to turn. Emits `onrotate(direction)`
-  // (−1, 0, or 1) each animation frame while held.
+  // Left/right rotation panel.
+  // A split circle: hold ↺ / Q to turn left, ↻ / E to turn right.
+  // Solid black icons and letters at the bottom inside each half circle.
   import { onMount } from 'svelte';
 
-  let { onrotate }: { onrotate: (direction: number) => void } = $props();
+  let {
+    onrotate,
+    turnForce,
+  }: {
+    onrotate: (direction: number) => void;
+    turnForce?: number;
+  } = $props();
 
   let dir = $state(0);
   const pressed = { q: false, e: false };
+
+  const activeDir = $derived(dir !== 0 ? dir : (turnForce ?? 0));
 
   function recompute() {
     dir = pressed.q && !pressed.e ? 1 : pressed.e && !pressed.q ? -1 : 0;
@@ -61,58 +69,87 @@
   <div class="ring">
     <button
       class="half"
-      class:on={dir > 0}
-      aria-label="Rotate robot left"
-      title="Q"
+      class:on={activeDir > 0.05}
+      aria-label="Rotate robot left (Q)"
+      title="Q — rotate left"
       onpointerdown={(e) => press(1, e)}
       onpointerup={release}
       onpointerleave={release}
       onpointercancel={release}
-    >↺</button>
+    >
+      <span class="icon">↺</span>
+      <span class="key">Q</span>
+    </button>
     <button
       class="half"
-      class:on={dir < 0}
-      aria-label="Rotate robot right"
-      title="E"
+      class:on={activeDir < -0.05}
+      aria-label="Rotate robot right (E)"
+      title="E — rotate right"
       onpointerdown={(e) => press(-1, e)}
       onpointerup={release}
       onpointerleave={release}
       onpointercancel={release}
-    >↻</button>
+    >
+      <span class="icon">↻</span>
+      <span class="key">E</span>
+    </button>
   </div>
-  <span class="cap">rotate · Q,E</span>
 </div>
 
 <style>
-  .rotwrap { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
+  .rotwrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    touch-action: none;
+  }
   .ring {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    width: 4rem;
-    height: 4rem;
+    width: 4.4rem;
+    height: 4.4rem;
     border-radius: 50%;
-    border: 1px solid var(--line, #888);
+    border: 1.8px solid #0f172a;
     overflow: hidden;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
   }
   .half {
     width: 100%;
     height: 100%;
     min-width: 0;
     margin: 0;
-    padding: 0;
+    padding: 0.3rem 0;
     border: none;
     border-radius: 0;
     box-sizing: border-box;
-    background: color-mix(in srgb, var(--bg, #222) 82%, #888);
-    color: var(--text, #eee);
-    font-size: 1.4rem;
-    line-height: 1;
+    background: #f1f5f9;
+    color: #0f172a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
     cursor: pointer;
     touch-action: none;
     user-select: none;
     transition: background 80ms;
   }
-  .half:first-child { border-right: 1px solid var(--line, #888); }
-  .half.on { background: var(--knob, #e8e8e8); color: #111; }
-  .cap { font-size: 0.68rem; color: var(--text-soft, #999); }
+  .half:first-child { border-right: 1.5px solid #0f172a; }
+  .half:hover { background: #e2e8f0; }
+  .half.on { background: #f59e0b; color: #0f172a; }
+  .icon {
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1;
+    color: #0f172a;
+  }
+  .key {
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1;
+    color: #0f172a;
+  }
 </style>
